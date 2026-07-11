@@ -110,10 +110,13 @@
 const W = 48;          // world width/depth
 const H = 34;          // world height
 const WATER_LEVEL = 12;
-const CHUNK_SEED = 20260711; // 固定シード(全員が同じ地形を見られるように)
+const CHUNK_SEED = 20260711; // 固定シード
 
 // Block types
 const AIR=0, GRASS=1, DIRT=2, STONE=3, SAND=4, WATER=5, WOOD=6, LEAVES=7, SNOW=8;
+// 内部処理用に「草の上面」という仮想のブロックIDを1つ定義します
+const GRASS_TOP = 99; 
+
 const BLOCK_NAMES = {};
 BLOCK_NAMES[GRASS]="草"; BLOCK_NAMES[DIRT]="土"; BLOCK_NAMES[STONE]="石";
 BLOCK_NAMES[SAND]="砂"; BLOCK_NAMES[WOOD]="木材"; BLOCK_NAMES[LEAVES]="葉"; BLOCK_NAMES[SNOW]="雪";
@@ -123,6 +126,7 @@ const HOTBAR_BLOCKS = [GRASS, DIRT, STONE, SAND, WOOD, LEAVES, SNOW];
 // base colors per block (r,g,b 0-1)
 const BASE_COLOR = {};
 BASE_COLOR[GRASS] = [0.35,0.62,0.28];
+BASE_COLOR[GRASS_TOP] = [0.35,0.62,0.28]; // 上面の色
 BASE_COLOR[DIRT]  = [0.47,0.34,0.22];
 BASE_COLOR[STONE] = [0.52,0.52,0.54];
 BASE_COLOR[SAND]  = [0.86,0.79,0.55];
@@ -141,21 +145,22 @@ function createBlockMaterial(url) {
   return new THREE.MeshLambertMaterial({ vertexColors: true, map: tex });
 }
 
-// ★ここでブロックごとに個別の画像ファイルを指定できるように定義します
+// ★マテリアル定義。GRASSは「側面」用、GRASS_TOPを「上面」用として読み込みます
 const opMaterialsMap = {};
-opMaterialsMap[GRASS]  = createBlockMaterial('grass.png');
-opMaterialsMap[DIRT]   = createBlockMaterial('dirt.png');
-opMaterialsMap[STONE]  = createBlockMaterial('stone.png');
-opMaterialsMap[SAND]   = createBlockMaterial('sand.png');
-opMaterialsMap[WOOD]   = createBlockMaterial('wood.png');
-opMaterialsMap[LEAVES] = createBlockMaterial('leaves.png');
-opMaterialsMap[SNOW]   = createBlockMaterial('snow.png');
+opMaterialsMap[GRASS]     = createBlockMaterial('grass.png');     // 側面・底面用画像
+opMaterialsMap[GRASS_TOP] = createBlockMaterial('grass_top.png'); // 上面用画像
+opMaterialsMap[DIRT]      = createBlockMaterial('dirt.png');
+opMaterialsMap[STONE]     = createBlockMaterial('stone.png');
+opMaterialsMap[SAND]      = createBlockMaterial('sand.png');
+opMaterialsMap[WOOD]      = createBlockMaterial('wood.png');
+opMaterialsMap[LEAVES]    = createBlockMaterial('leaves.png');
+opMaterialsMap[SNOW]      = createBlockMaterial('snow.png');
 
-// マテリアル配列とそのインデックスの対応マップを作成
-const OPAQUE_BLOCK_TYPES = [GRASS, DIRT, STONE, SAND, WOOD, LEAVES, SNOW];
-const opMaterialsArray = OPAQUE_BLOCK_TYPES.map(type => opMaterialsMap[type]);
+// 描画エンジンが処理する全不透明テクスチャの登録リスト
+const OPAQUE_RENDER_TYPES = [GRASS, GRASS_TOP, DIRT, STONE, SAND, WOOD, LEAVES, SNOW];
+const opMaterialsArray = OPAQUE_RENDER_TYPES.map(type => opMaterialsMap[type]);
 const opMaterialIndexMap = {};
-OPAQUE_BLOCK_TYPES.forEach((type, index) => {
+OPAQUE_RENDER_TYPES.forEach((type, index) => {
   opMaterialIndexMap[type] = index;
 });
 
@@ -210,7 +215,7 @@ function colorForId(id){
   return "hsl(" + hue + ", 65%, 55%)";
 }
 
-// ---------- Noise (value noise, seeded) ----------
+// ---------- Noise ----------
 function hash2(x, z) {
   let n = Math.sin(x*127.1 + z*311.7 + CHUNK_SEED*0.001) * 43758.5453123;
   return n - Math.floor(n);
@@ -333,9 +338,8 @@ const FACES = [
 ];
 
 function buildMeshes() {
-  // 不透明ブロックは種類ごとにバッファを分ける
   const opChunks = {};
-  OPAQUE_BLOCK_TYPES.forEach(type => {
+  OPAQUE_RENDER_TYPES.forEach(type => {
     opChunks[type] = { pos:[], col:[], norm:[], uv:[] };
   });
   
@@ -353,14 +357,23 @@ function buildMeshes() {
           const hideFace = isWater ? (nb !== AIR) : (nb !== AIR && nb !== WATER);
           if (hideFace) continue;
 
-          let col = BASE_COLOR[b] || [1,0,1];
+          // ★面ごとのマテリアル判定
+          let renderType = b;
+          if (b === GRASS) {
+            if (ny === 1) {
+              renderType = GRASS_TOP; // 真上の面なら草の上面テクスチャを適用
+            }
+          }
+
+          let col = BASE_COLOR[renderType] || [1,0,1];
+          // 草ブロックの側面(ny === 0)のカラー補正を外す（テクスチャ画像側の土の色をそのまま出すため）
           if (b === GRASS && ny === 0) {
-            col = [0.42,0.36,0.20];
+            col = [1.0, 1.0, 1.0]; 
           }
           const shade = faceShade(nx,ny,nz);
           const r=col[0]*shade, g=col[1]*shade, bl=col[2]*shade;
 
-          const chunk = isWater ? null : opChunks[b];
+          const chunk = isWater ? null : opChunks[renderType];
           const arr = isWater ? wPos : chunk.pos;
           const carr = isWater ? wCol : chunk.col;
           const narr = isWater ? wNorm : chunk.norm;
@@ -390,12 +403,11 @@ function buildMeshes() {
   if (opaqueMesh) { scene.remove(opaqueMesh); opaqueMesh.geometry.dispose(); }
   if (waterMesh) { scene.remove(waterMesh); waterMesh.geometry.dispose(); }
 
-  // 不透明メッシュの結合処理（マルチマテリアル対応）
   const finalOpPos = [], finalOpCol = [], finalOpNorm = [], finalOpUV = [];
   const groups = [];
   let vertexOffset = 0;
 
-  OPAQUE_BLOCK_TYPES.forEach(type => {
+  OPAQUE_RENDER_TYPES.forEach(type => {
     const chunk = opChunks[type];
     const count = chunk.pos.length / 3;
     if (count > 0) {
@@ -420,14 +432,12 @@ function buildMeshes() {
     opGeo.setAttribute('normal', new THREE.Float32BufferAttribute(finalOpNorm,3));
     opGeo.setAttribute('uv', new THREE.Float32BufferAttribute(finalOpUV,2));
     
-    // マテリアルグループを登録
     groups.forEach(g => opGeo.addGroup(g.start, g.count, g.materialIndex));
 
     opaqueMesh = new THREE.Mesh(opGeo, opMaterialsArray);
     scene.add(opaqueMesh);
   }
 
-  // 水面の生成
   if (wPos.length > 0) {
     const wGeo = new THREE.BufferGeometry();
     wGeo.setAttribute('position', new THREE.Float32BufferAttribute(wPos,3));
@@ -538,7 +548,7 @@ function updatePlayer(dt){
   camera.rotation.x = player.pitch;
 }
 
-// ---------- Name entry, pointer lock + mouse look ----------
+// ---------- Pointer lock ----------
 const canvas = renderer.domElement;
 const startScreen = document.getElementById('startScreen');
 const pausedEl = document.getElementById('paused');
@@ -566,7 +576,6 @@ startBtn.addEventListener('click', ()=>{
   updateOnlineListUI({});
   joinMultiplayer();
   
-  // ★解決策: ポインターロック要求より先にゲーム開始ステートを確定させて画面の表示を確実に切り替える
   gameStarted = true;
   startScreen.style.display = 'none';
   canvas.requestPointerLock();
@@ -588,7 +597,7 @@ document.addEventListener('mousemove', e=>{
   player.pitch = Math.max(-lim, Math.min(lim, player.pitch));
 });
 
-// ---------- Block interaction (voxel raycast, DDA) ----------
+// ---------- Block interaction ----------
 function raycastVoxel(maxDist){
   const dir = new THREE.Vector3();
   camera.getWorldDirection(dir);
@@ -655,7 +664,7 @@ canvas.addEventListener('mousedown', e=>{
 });
 canvas.addEventListener('contextmenu', e=> e.preventDefault());
 
-// ---------- Multiplayer (Firebase Realtime Database) ----------
+// ---------- Multiplayer (Firebase) ----------
 function pushBlockEdit(x,y,z,val){
   if (!fbReady || !db) return;
   try { db.ref(blocksPath + '/' + x + '_' + y + '_' + z).set(val); }
@@ -711,7 +720,7 @@ window.addEventListener('beforeunload', ()=>{
 });
 
 // ---------- Remote player avatars ----------
-const remotePlayers = {}; // id -> { group, target:{x,y,z,yaw} }
+const remotePlayers = {};
 
 function makeNameSprite(name){
   const cnv = document.createElement('canvas');
@@ -734,20 +743,16 @@ function makeNameSprite(name){
 
 function makeAvatar(name, colorCss){
   const group = new THREE.Group();
-  
   const steveMat = new THREE.MeshLambertMaterial({ 
     map: steveTexture,
     color: new THREE.Color(colorCss) 
   });
-  
   const body = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1.2, 0.25), steveMat);
   body.position.y = 0.9;
   group.add(body);
-  
   const head = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), steveMat);
   head.position.y = 1.75;
   group.add(head);
-  
   group.add(makeNameSprite(name));
   return group;
 }
