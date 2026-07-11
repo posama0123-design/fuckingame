@@ -112,272 +112,262 @@ const H = 34;          // world height
 const WATER_LEVEL = 12;
 const CHUNK_SEED = 20260711; // 固定シード(全員が同じ地形を見られるように)
 
-// Block types[cite: 1]
-const AIR=0, GRASS=1, DIRT=2, STONE=3, SAND=4, WATER=5, WOOD=6, LEAVES=7, SNOW=8;[cite: 1]
-const BLOCK_NAMES = {};[cite: 1]
-BLOCK_NAMES[GRASS]="草"; BLOCK_NAMES[DIRT]="土"; BLOCK_NAMES[STONE]="石";[cite: 1]
-BLOCK_NAMES[SAND]="砂"; BLOCK_NAMES[WOOD]="木材"; BLOCK_NAMES[LEAVES]="葉"; BLOCK_NAMES[SNOW]="雪";[cite: 1]
+// Block types
+const AIR=0, GRASS=1, DIRT=2, STONE=3, SAND=4, WATER=5, WOOD=6, LEAVES=7, SNOW=8;
+const BLOCK_NAMES = {};
+BLOCK_NAMES[GRASS]="草"; BLOCK_NAMES[DIRT]="土"; BLOCK_NAMES[STONE]="石";
+BLOCK_NAMES[SAND]="砂"; BLOCK_NAMES[WOOD]="木材"; BLOCK_NAMES[LEAVES]="葉"; BLOCK_NAMES[SNOW]="雪";
 
-const HOTBAR_BLOCKS = [GRASS, DIRT, STONE, SAND, WOOD, LEAVES, SNOW];[cite: 1]
+const HOTBAR_BLOCKS = [GRASS, DIRT, STONE, SAND, WOOD, LEAVES, SNOW];
 
-// base colors per block (r,g,b 0-1)[cite: 1]
-const BASE_COLOR = {};[cite: 1]
-BASE_COLOR[GRASS] = [0.35,0.62,0.28];[cite: 1]
-BASE_COLOR[DIRT]  = [0.47,0.34,0.22];[cite: 1]
-BASE_COLOR[STONE] = [0.52,0.52,0.54];[cite: 1]
-BASE_COLOR[SAND]  = [0.86,0.79,0.55];[cite: 1]
-BASE_COLOR[WOOD]  = [0.40,0.28,0.16];[cite: 1]
-BASE_COLOR[LEAVES]= [0.20,0.45,0.18];[cite: 1]
-BASE_COLOR[SNOW]  = [0.92,0.94,0.96];[cite: 1]
-BASE_COLOR[WATER] = [0.20,0.42,0.62];[cite: 1]
+// base colors per block (r,g,b 0-1)
+const BASE_COLOR = {};
+BASE_COLOR[GRASS] = [0.35,0.62,0.28];
+BASE_COLOR[DIRT]  = [0.47,0.34,0.22];
+BASE_COLOR[STONE] = [0.52,0.52,0.54];
+BASE_COLOR[SAND]  = [0.86,0.79,0.55];
+BASE_COLOR[WOOD]  = [0.40,0.28,0.16];
+BASE_COLOR[LEAVES]= [0.20,0.45,0.18];
+BASE_COLOR[SNOW]  = [0.92,0.94,0.96];
+BASE_COLOR[WATER] = [0.20,0.42,0.62];
 
-// ---------- Texture Loader ----------
+// ---------- Texture Loader & Materials Setup ----------
 const textureLoader = new THREE.TextureLoader();
 
-// ブロックタイプごとの個別テクスチャ割り当て設定
-const blockTextures = {};
-const blockFiles = {
-  [GRASS]: 'grass.png',
-  [DIRT]: 'dirt.png',
-  [STONE]: 'stone.png',
-  [SAND]: 'sand.png',
-  [WATER]: 'water.png',
-  [WOOD]: 'wood.png',
-  [LEAVES]: 'leaves.png',
-  [SNOW]: 'snow.png'
-};
-
-// 各テクスチャの読み込みとドット絵フィルタ適用
-for (const key in blockFiles) {
-  const tex = textureLoader.load(blockFiles[key]);
+function createBlockMaterial(url) {
+  const tex = textureLoader.load(url);
   tex.magFilter = THREE.NearestFilter;
   tex.minFilter = THREE.NearestFilter;
-  blockTextures[key] = tex;
+  return new THREE.MeshLambertMaterial({ vertexColors: true, map: tex });
 }
+
+// ★ここでブロックごとに個別の画像ファイルを指定できるように定義します
+const opMaterialsMap = {};
+opMaterialsMap[GRASS]  = createBlockMaterial('grass.png');
+opMaterialsMap[DIRT]   = createBlockMaterial('dirt.png');
+opMaterialsMap[STONE]  = createBlockMaterial('stone.png');
+opMaterialsMap[SAND]   = createBlockMaterial('sand.png');
+opMaterialsMap[WOOD]   = createBlockMaterial('wood.png');
+opMaterialsMap[LEAVES] = createBlockMaterial('leaves.png');
+opMaterialsMap[SNOW]   = createBlockMaterial('snow.png');
+
+// マテリアル配列とそのインデックスの対応マップを作成
+const OPAQUE_BLOCK_TYPES = [GRASS, DIRT, STONE, SAND, WOOD, LEAVES, SNOW];
+const opMaterialsArray = OPAQUE_BLOCK_TYPES.map(type => opMaterialsMap[type]);
+const opMaterialIndexMap = {};
+OPAQUE_BLOCK_TYPES.forEach((type, index) => {
+  opMaterialIndexMap[type] = index;
+});
+
+// 水専用のマテリアル
+const waterTexture = textureLoader.load('water.png');
+waterTexture.magFilter = THREE.NearestFilter;
+waterTexture.minFilter = THREE.NearestFilter;
+const wMat = new THREE.MeshLambertMaterial({ 
+  vertexColors: true, 
+  map: waterTexture, 
+  transparent: true, 
+  opacity: 0.65, 
+  side: THREE.DoubleSide 
+});
 
 const steveTexture = textureLoader.load('steve.png');
 steveTexture.magFilter = THREE.NearestFilter;
 steveTexture.minFilter = THREE.NearestFilter;
 
-// 各ブロックに対応するマテリアル配列の構築 (OpaqueMesh用マテリアルインデックスに対応)
-// インデックス 0=AIR, 1=GRASS, 2=DIRT, 3=STONE, 4=SAND, 5=WATER, 6=WOOD, 7=LEAVES, 8=SNOW
-const opaqueMaterials = [];
-for (let i = 0; i <= 8; i++) {
-  if (i === AIR || i === WATER) {
-    opaqueMaterials.push(new THREE.MeshLambertMaterial({ vertexColors: true }));
-  } else {
-    opaqueMaterials.push(new THREE.MeshLambertMaterial({ vertexColors: true, map: blockTextures[i] }));
+// ---------- Firebase (Realtime Database) ----------
+const firebaseConfig = {
+  apiKey: "AIzaSyAKf-iBYV_X3aJfpK2pfkBPFVoNcPC1lSU",
+  authDomain: "my-ktty.firebaseapp.com",
+  databaseURL: "https://my-ktty-default-rtdb.firebaseio.com",
+  projectId: "my-ktty",
+  storageBucket: "my-ktty.firebasestorage.app",
+  messagingSenderId: "313123611276",
+  appId: "1:313123611276:web:a625bdb2844f5864c551a9",
+  measurementId: "G-W6Y6QB1MDF"
+};
+const ROOM = "main";
+const blocksPath = "rooms/" + ROOM + "/blocks";
+const playersPath = "rooms/" + ROOM + "/players";
+
+let fbReady = false, db = null, playerRef = null, myId = null;
+let playerName = "", myColor = "#ffffff";
+try {
+  if (typeof firebase !== "undefined") {
+    firebase.initializeApp(firebaseConfig);
+    db = firebase.database();
+    fbReady = true;
   }
+} catch (err) {
+  console.warn("Firebase 初期化に失敗しました。1人プレイで続行します。", err);
+  fbReady = false;
 }
 
-// 水専用のマテリアル
-const waterMaterial = new THREE.MeshLambertMaterial({
-  vertexColors: true,
-  map: blockTextures[WATER],
-  transparent: true,
-  opacity: 0.65,
-  side: THREE.DoubleSide
-});
+function colorForId(id){
+  let h = 0;
+  for (let i=0;i<id.length;i++) h = (h*31 + id.charCodeAt(i)) >>> 0;
+  const hue = h % 360;
+  return "hsl(" + hue + ", 65%, 55%)";
+}
 
-// ---------- Firebase (Realtime Database) ----------[cite: 1]
-const firebaseConfig = {[cite: 1]
-  apiKey: "AIzaSyAKf-iBYV_X3aJfpK2pfkBPFVoNcPC1lSU",[cite: 1]
-  authDomain: "my-ktty.firebaseapp.com",[cite: 1]
-  databaseURL: "https://my-ktty-default-rtdb.firebaseio.com",[cite: 1]
-  projectId: "my-ktty",[cite: 1]
-  storageBucket: "my-ktty.firebasestorage.app",[cite: 1]
-  messagingSenderId: "313123611276",[cite: 1]
-  appId: "1:313123611276:web:a625bdb2844f5864c551a9",[cite: 1]
-  measurementId: "G-W6Y6QB1MDF"[cite: 1]
-};[cite: 1]
-const ROOM = "main";[cite: 1]
-const blocksPath = "rooms/" + ROOM + "/blocks";[cite: 1]
-const playersPath = "rooms/" + ROOM + "/players";[cite: 1]
+// ---------- Noise (value noise, seeded) ----------
+function hash2(x, z) {
+  let n = Math.sin(x*127.1 + z*311.7 + CHUNK_SEED*0.001) * 43758.5453123;
+  return n - Math.floor(n);
+}
+function smooth(t){ return t*t*(3-2*t); }
+function valueNoise(x, z) {
+  const xi = Math.floor(x), zi = Math.floor(z);
+  const xf = x - xi, zf = z - zi;
+  const v00 = hash2(xi,zi), v10 = hash2(xi+1,zi);
+  const v01 = hash2(xi,zi+1), v11 = hash2(xi+1,zi+1);
+  const u = smooth(xf), v = smooth(zf);
+  const a = v00 + (v10-v00)*u;
+  const b = v01 + (v11-v01)*u;
+  return a + (b-a)*v;
+}
+function fbm(x, z, octaves) {
+  let total = 0, amp = 1, freq = 1, maxAmp = 0;
+  for (let i=0;i<octaves;i++) {
+    total += valueNoise(x*freq, z*freq) * amp;
+    maxAmp += amp;
+    amp *= 0.5; freq *= 2.15;
+  }
+  return total / maxAmp;
+}
 
-let fbReady = false, db = null, playerRef = null, myId = null;[cite: 1]
-let playerName = "", myColor = "#ffffff";[cite: 1]
-try {[cite: 1]
-  if (typeof firebase !== "undefined") {[cite: 1]
-    firebase.initializeApp(firebaseConfig);[cite: 1]
-    db = firebase.database();[cite: 1]
-    fbReady = true;[cite: 1]
-  }[cite: 1]
-} catch (err) {[cite: 1]
-  console.warn("Firebase 初期化に失敗しました。1人プレイで続行します。", err);[cite: 1]
-  fbReady = false;[cite: 1]
-}[cite: 1]
+// ---------- World storage ----------
+const world = new Uint8Array(W*W*H);
+function idx(x,y,z){ return x + z*W + y*W*W; }
+function inBounds(x,y,z){ return x>=0 && x<W && y>=0 && y<H && z>=0 && z<W; }
+function getBlock(x,y,z){ if(!inBounds(x,y,z)) return AIR; return world[idx(x,y,z)]; }
+function setBlock(x,y,z,v){ if(!inBounds(x,y,z)) return; world[idx(x,y,z)] = v; }
 
-function colorForId(id){[cite: 1]
-  let h = 0;[cite: 1]
-  for (let i=0;i<id.length;i++) h = (h*31 + id.charCodeAt(i)) >>> 0;[cite: 1]
-  const hue = h % 360;[cite: 1]
-  return "hsl(" + hue + ", 65%, 55%)";[cite: 1]
-}[cite: 1]
+function generateWorld() {
+  const heightMap = new Int16Array(W*W);
+  for (let x=0;x<W;x++) {
+    for (let z=0;z<W;z++) {
+      const n = fbm(x*0.045, z*0.045, 4);
+      const h = Math.floor(9 + n*20);
+      heightMap[x+z*W] = h;
+      for (let y=0; y<H; y++) {
+        let b = AIR;
+        if (y < h-4) b = STONE;
+        else if (y < h) b = (h < WATER_LEVEL+1) ? SAND : DIRT;
+        else if (y === h) {
+          if (h < WATER_LEVEL+1) b = SAND;
+          else if (h > 24) b = SNOW;
+          else b = GRASS;
+        } else if (y <= WATER_LEVEL && y > h) {
+          b = WATER;
+        }
+        if (b !== AIR) setBlock(x,y,z,b);
+      }
+    }
+  }
+  // trees
+  for (let x=3;x<W-3;x++) {
+    for (let z=3;z<W-3;z++) {
+      const h = heightMap[x+z*W];
+      if (h >= WATER_LEVEL+1 && h < 23 && hash2(x*3.1,z*7.7) < 0.02) {
+        const trunkH = 3 + Math.floor(hash2(x*9.3,z*2.1)*3);
+        for (let ty=1; ty<=trunkH; ty++) setBlock(x, h+ty, z, WOOD);
+        const topY = h+trunkH;
+        for (let lx=-2; lx<=2; lx++) {
+          for (let lz=-2; lz<=2; lz++) {
+            for (let ly=-2; ly<=1; ly++) {
+              const d = Math.abs(lx)+Math.abs(lz)+Math.abs(ly*0.8);
+              if (d <= 3 && !(lx===0 && lz===0 && ly<=0)) {
+                if (getBlock(x+lx, topY+ly, z+lz) === AIR) {
+                  setBlock(x+lx, topY+ly, z+lz, LEAVES);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return heightMap;
+}
+const heightMap = generateWorld();
 
-// ---------- Noise (value noise, seeded) ----------[cite: 1]
-function hash2(x, z) {[cite: 1]
-  let n = Math.sin(x*127.1 + z*311.7 + CHUNK_SEED*0.001) * 43758.5453123;[cite: 1]
-  return n - Math.floor(n);[cite: 1]
-}[cite: 1]
-function smooth(t){ return t*t*(3-2*t); }[cite: 1]
-function valueNoise(x, z) {[cite: 1]
-  const xi = Math.floor(x), zi = Math.floor(z);[cite: 1]
-  const xf = x - xi, zf = z - zi;[cite: 1]
-  const v00 = hash2(xi,zi), v10 = hash2(xi+1,zi);[cite: 1]
-  const v01 = hash2(xi,zi+1), v11 = hash2(xi+1,zi+1);[cite: 1]
-  const u = smooth(xf), v = smooth(zf);[cite: 1]
-  const a = v00 + (v10-v00)*u;[cite: 1]
-  const b = v01 + (v11-v01)*u;[cite: 1]
-  return a + (b-a)*v;[cite: 1]
-}[cite: 1]
-function fbm(x, z, octaves) {[cite: 1]
-  let total = 0, amp = 1, freq = 1, maxAmp = 0;[cite: 1]
-  for (let i=0;i<octaves;i++) {[cite: 1]
-    total += valueNoise(x*freq, z*freq) * amp;[cite: 1]
-    maxAmp += amp;[cite: 1]
-    amp *= 0.5; freq *= 2.15;[cite: 1]
-  }[cite: 1]
-  return total / maxAmp;[cite: 1]
-}[cite: 1]
+// ---------- Three.js setup ----------
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x8ec6f0);
+scene.fog = new THREE.Fog(0x8ec6f0, 60, 170);
 
-// ---------- World storage ----------[cite: 1]
-const world = new Uint8Array(W*W*H);[cite: 1]
-function idx(x,y,z){ return x + z*W + y*W*W; }[cite: 1]
-function inBounds(x,y,z){ return x>=0 && x<W && y>=0 && y<H && z>=0 && z<W; }[cite: 1]
-function getBlock(x,y,z){ if(!inBounds(x,y,z)) return AIR; return world[idx(x,y,z)]; }[cite: 1]
-function setBlock(x,y,z,v){ if(!inBounds(x,y,z)) return; world[idx(x,y,z)] = v; }[cite: 1]
+const camera = new THREE.PerspectiveCamera(72, window.innerWidth/window.innerHeight, 0.1, 500);
 
-function generateWorld() {[cite: 1]
-  const heightMap = new Int16Array(W*W);[cite: 1]
-  for (let x=0;x<W;x++) {[cite: 1]
-    for (let z=0;z<W;z++) {[cite: 1]
-      const n = fbm(x*0.045, z*0.045, 4);[cite: 1]
-      const h = Math.floor(9 + n*20);[cite: 1]
-      heightMap[x+z*W] = h;[cite: 1]
-      for (let y=0; y<H; y++) {[cite: 1]
-        let b = AIR;[cite: 1]
-        if (y < h-4) b = STONE;[cite: 1]
-        else if (y < h) b = (h < WATER_LEVEL+1) ? SAND : DIRT;[cite: 1]
-        else if (y === h) {[cite: 1]
-          if (h < WATER_LEVEL+1) b = SAND;[cite: 1]
-          else if (h > 24) b = SNOW;[cite: 1]
-          else b = GRASS;[cite: 1]
-        } else if (y <= WATER_LEVEL && y > h) {[cite: 1]
-          b = WATER;[cite: 1]
-        }[cite: 1]
-        if (b !== AIR) setBlock(x,y,z,b);[cite: 1]
-      }[cite: 1]
-    }[cite: 1]
-  }[cite: 1]
-  // trees[cite: 1]
-  for (let x=3;x<W-3;x++) {[cite: 1]
-    for (let z=3;z<W-3;z++) {[cite: 1]
-      const h = heightMap[x+z*W];[cite: 1]
-      if (h >= WATER_LEVEL+1 && h < 23 && hash2(x*3.1,z*7.7) < 0.02) {[cite: 1]
-        const trunkH = 3 + Math.floor(hash2(x*9.3,z*2.1)*3);[cite: 1]
-        for (let ty=1; ty<=trunkH; ty++) setBlock(x, h+ty, z, WOOD);[cite: 1]
-        const topY = h+trunkH;[cite: 1]
-        for (let lx=-2; lx<=2; lx++) {[cite: 1]
-          for (let lz=-2; lz<=2; lz++) {[cite: 1]
-            for (let ly=-2; ly<=1; ly++) {[cite: 1]
-              const d = Math.abs(lx)+Math.abs(lz)+Math.abs(ly*0.8);[cite: 1]
-              if (d <= 3 && !(lx===0 && lz===0 && ly<=0)) {[cite: 1]
-                if (getBlock(x+lx, topY+ly, z+lz) === AIR) {[cite: 1]
-                  setBlock(x+lx, topY+ly, z+lz, LEAVES);[cite: 1]
-                }[cite: 1]
-              }[cite: 1]
-            }[cite: 1]
-          }[cite: 1]
-        }[cite: 1]
-      }[cite: 1]
-    }[cite: 1]
-  }[cite: 1]
-  return heightMap;[cite: 1]
-}[cite: 1]
-const heightMap = generateWorld();[cite: 1]
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+document.body.appendChild(renderer.domElement);
 
-// ---------- Three.js setup ----------[cite: 1]
-const scene = new THREE.Scene();[cite: 1]
-scene.background = new THREE.Color(0x8ec6f0);[cite: 1]
-scene.fog = new THREE.Fog(0x8ec6f0, 60, 170);[cite: 1]
+const hemi = new THREE.HemisphereLight(0xbfe0ff, 0x3a3a2a, 0.9);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xffffff, 0.85);
+sun.position.set(60, 90, 40);
+scene.add(sun);
+scene.add(new THREE.AmbientLight(0xffffff, 0.25));
 
-const camera = new THREE.PerspectiveCamera(72, window.innerWidth/window.innerHeight, 0.1, 500);[cite: 1]
+// ---------- Mesh building ----------
+let opaqueMesh = null;
+let waterMesh = null;
+let dirty = false;
 
-const renderer = new THREE.WebGLRenderer({ antialias:true });[cite: 1]
-renderer.setSize(window.innerWidth, window.innerHeight);[cite: 1]
-renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));[cite: 1]
-document.body.appendChild(renderer.domElement);[cite: 1]
+function faceShade(nx, ny, nz) {
+  if (ny === 1) return 1.0;
+  if (ny === -1) return 0.45;
+  if (nx !== 0) return 0.72;
+  return 0.6;
+}
 
-const hemi = new THREE.HemisphereLight(0xbfe0ff, 0x3a3a2a, 0.9);[cite: 1]
-scene.add(hemi);[cite: 1]
-const sun = new THREE.DirectionalLight(0xffffff, 0.85);[cite: 1]
-sun.position.set(60, 90, 40);[cite: 1]
-scene.add(sun);[cite: 1]
-scene.add(new THREE.AmbientLight(0xffffff, 0.25));[cite: 1]
-
-// ---------- Mesh building ----------[cite: 1]
-let opaqueMesh = null;[cite: 1]
-let waterMesh = null;[cite: 1]
-let dirty = false;[cite: 1]
-
-function faceShade(nx, ny, nz) {[cite: 1]
-  if (ny === 1) return 1.0;[cite: 1]
-  if (ny === -1) return 0.45;[cite: 1]
-  if (nx !== 0) return 0.72;[cite: 1]
-  return 0.6;[cite: 1]
-}[cite: 1]
-
-const FACES = [[cite: 1]
-  { dir:[1,0,0],  corners:[[1,0,0],[1,1,0],[1,1,1],[1,0,1]] },[cite: 1]
-  { dir:[-1,0,0], corners:[[0,0,1],[0,1,1],[0,1,0],[0,0,0]] },[cite: 1]
-  { dir:[0,1,0],  corners:[[0,1,1],[1,1,1],[1,1,0],[0,1,0]] },[cite: 1]
-  { dir:[0,-1,0], corners:[[0,0,0],[1,0,0],[1,0,1],[0,0,1]] },[cite: 1]
-  { dir:[0,0,1],  corners:[[1,0,1],[1,1,1],[0,1,1],[0,0,1]] },[cite: 1]
-  { dir:[0,0,-1], corners:[[0,0,0],[0,1,0],[1,1,0],[1,0,0]] },[cite: 1]
-];[cite: 1]
+const FACES = [
+  { dir:[1,0,0],  corners:[[1,0,0],[1,1,0],[1,1,1],[1,0,1]] },
+  { dir:[-1,0,0], corners:[[0,0,1],[0,1,1],[0,1,0],[0,0,0]] },
+  { dir:[0,1,0],  corners:[[0,1,1],[1,1,1],[1,1,0],[0,1,0]] },
+  { dir:[0,-1,0], corners:[[0,0,0],[1,0,0],[1,0,1],[0,0,1]] },
+  { dir:[0,0,1],  corners:[[1,0,1],[1,1,1],[0,1,1],[0,0,1]] },
+  { dir:[0,0,-1], corners:[[0,0,0],[0,1,0],[1,1,0],[1,0,0]] },
+];
 
 function buildMeshes() {
+  // 不透明ブロックは種類ごとにバッファを分ける
+  const opChunks = {};
+  OPAQUE_BLOCK_TYPES.forEach(type => {
+    opChunks[type] = { pos:[], col:[], norm:[], uv:[] };
+  });
+  
   const wPos=[], wCol=[], wNorm=[], wUV=[];
 
-  // OpaqueMesh（不透明オブジェクト）はテクスチャごとのグループ（マルチマテリアル）として保持する
-  // 各ブロックタイプ（1〜8、ただしWATER=5は別処理）用のポリゴン一時配列
-  const opaqueGroups = {};
-  HOTBAR_BLOCKS.forEach(b => {
-    if (b !== WATER) {
-      opaqueGroups[b] = { pos: [], col: [], norm: [], uv: [] };
-    }
-  });
+  for (let x=0;x<W;x++){
+    for (let z=0;z<W;z++){
+      for (let y=0;y<H;y++){
+        const b = getBlock(x,y,z);
+        if (b === AIR) continue;
+        const isWater = (b === WATER);
+        for (const f of FACES) {
+          const nx=f.dir[0], ny=f.dir[1], nz=f.dir[2];
+          const nb = getBlock(x+nx,y+ny,z+nz);
+          const hideFace = isWater ? (nb !== AIR) : (nb !== AIR && nb !== WATER);
+          if (hideFace) continue;
 
-  for (let x=0;x<W;x++){[cite: 1]
-    for (let z=0;z<W;z++){[cite: 1]
-      for (let y=0;y<H;y++){[cite: 1]
-        const b = getBlock(x,y,z);[cite: 1]
-        if (b === AIR) continue;[cite: 1]
-        const isWater = (b === WATER);[cite: 1]
-        for (const f of FACES) {[cite: 1]
-          const nx=f.dir[0], ny=f.dir[1], nz=f.dir[2];[cite: 1]
-          const nb = getBlock(x+nx,y+ny,z+nz);[cite: 1]
-          const hideFace = isWater ? (nb !== AIR) : (nb !== AIR && nb !== WATER);[cite: 1]
-          if (hideFace) continue;[cite: 1]
-
-          let col = BASE_COLOR[b] || [1,0,1];[cite: 1]
-          if (b === GRASS && ny === 0) {[cite: 1]
-            col = [0.42,0.36,0.20];[cite: 1]
-          }[cite: 1]
-          const shade = faceShade(nx,ny,nz);[cite: 1]
-          const r=col[0]*shade, g=col[1]*shade, bl=col[2]*shade;[cite: 1]
-
-          // 出力先バッファの切り替え
-          let arr, carr, narr, uvarr;
-          if (isWater) {
-            arr = wPos; carr = wCol; narr = wNorm; uvarr = wUV;
-          } else {
-            const g = opaqueGroups[b];
-            arr = g.pos; carr = g.col; narr = g.norm; uvarr = g.uv;
+          let col = BASE_COLOR[b] || [1,0,1];
+          if (b === GRASS && ny === 0) {
+            col = [0.42,0.36,0.20];
           }
+          const shade = faceShade(nx,ny,nz);
+          const r=col[0]*shade, g=col[1]*shade, bl=col[2]*shade;
 
-          const c = f.corners;[cite: 1]
-          const tri = [c[0],c[1],c[2], c[0],c[2],c[3]];[cite: 1]
+          const chunk = isWater ? null : opChunks[b];
+          const arr = isWater ? wPos : chunk.pos;
+          const carr = isWater ? wCol : chunk.col;
+          const narr = isWater ? wNorm : chunk.norm;
+          const uvarr = isWater ? wUV : chunk.uv;
+
+          const c = f.corners;
+          const tri = [c[0],c[1],c[2], c[0],c[2],c[3]];
           
           const uvs = [
             [0,0], [0,1], [1,1],
@@ -385,10 +375,10 @@ function buildMeshes() {
           ];
           let uvIdx = 0;
 
-          for (const corner of tri) {[cite: 1]
-            arr.push(x+corner[0], y+corner[1], z+corner[2]);[cite: 1]
-            carr.push(r,g,bl);[cite: 1]
-            narr.push(nx,ny,nz);[cite: 1]
+          for (const corner of tri) {
+            arr.push(x+corner[0], y+corner[1], z+corner[2]);
+            carr.push(r,g,bl);
+            narr.push(nx,ny,nz);
             uvarr.push(uvs[uvIdx][0], uvs[uvIdx][1]);
             uvIdx++;
           }
@@ -397,345 +387,353 @@ function buildMeshes() {
     }
   }
 
-  if (opaqueMesh) { scene.remove(opaqueMesh); opaqueMesh.geometry.dispose(); }[cite: 1]
-  if (waterMesh) { scene.remove(waterMesh); waterMesh.geometry.dispose(); }[cite: 1]
+  if (opaqueMesh) { scene.remove(opaqueMesh); opaqueMesh.geometry.dispose(); }
+  if (waterMesh) { scene.remove(waterMesh); waterMesh.geometry.dispose(); }
 
-  // 不透明な複合メッシュの構築（マルチマテリアルインデックスの割り当て）
-  const opPos=[], opCol=[], opNorm=[], opUV=[];
-  const opGeo = new THREE.BufferGeometry();
-  
+  // 不透明メッシュの結合処理（マルチマテリアル対応）
+  const finalOpPos = [], finalOpCol = [], finalOpNorm = [], finalOpUV = [];
+  const groups = [];
   let vertexOffset = 0;
-  HOTBAR_BLOCKS.forEach(b => {
-    if (b === WATER) return;
-    const g = opaqueGroups[b];
-    if (g.pos.length === 0) return;
 
-    const count = g.pos.length / 3;
-    
-    // 各ブロックのポリゴンデータを結合
-    for (let i = 0; i < g.pos.length; i++) opPos.push(g.pos[i]);
-    for (let i = 0; i < g.col.length; i++) opCol.push(g.col[i]);
-    for (let i = 0; i < g.norm.length; i++) opNorm.push(g.norm[i]);
-    for (let i = 0; i < g.uv.length; i++) opUV.push(g.uv[i]);
-
-    // マテリアルインデックスグループの追加 (ブロックIDとマテリアル配列のインデックスを一致させる)
-    opGeo.addGroup(vertexOffset, count, b);
-    vertexOffset += count;
+  OPAQUE_BLOCK_TYPES.forEach(type => {
+    const chunk = opChunks[type];
+    const count = chunk.pos.length / 3;
+    if (count > 0) {
+      finalOpPos.push(...chunk.pos);
+      finalOpCol.push(...chunk.col);
+      finalOpNorm.push(...chunk.norm);
+      finalOpUV.push(...chunk.uv);
+      
+      groups.push({
+        start: vertexOffset,
+        count: count,
+        materialIndex: opMaterialIndexMap[type]
+      });
+      vertexOffset += count;
+    }
   });
 
-  if (opPos.length > 0) {
-    opGeo.setAttribute('position', new THREE.Float32BufferAttribute(opPos,3));
-    opGeo.setAttribute('color', new THREE.Float32BufferAttribute(opCol,3));
-    opGeo.setAttribute('normal', new THREE.Float32BufferAttribute(opNorm,3));
-    opGeo.setAttribute('uv', new THREE.Float32BufferAttribute(opUV,2));
-    opaqueMesh = new THREE.Mesh(opGeo, opaqueMaterials);
+  if (vertexOffset > 0) {
+    const opGeo = new THREE.BufferGeometry();
+    opGeo.setAttribute('position', new THREE.Float32BufferAttribute(finalOpPos,3));
+    opGeo.setAttribute('color', new THREE.Float32BufferAttribute(finalOpCol,3));
+    opGeo.setAttribute('normal', new THREE.Float32BufferAttribute(finalOpNorm,3));
+    opGeo.setAttribute('uv', new THREE.Float32BufferAttribute(finalOpUV,2));
+    
+    // マテリアルグループを登録
+    groups.forEach(g => opGeo.addGroup(g.start, g.count, g.materialIndex));
+
+    opaqueMesh = new THREE.Mesh(opGeo, opMaterialsArray);
     scene.add(opaqueMesh);
   }
 
-  // 水メッシュの構築
+  // 水面の生成
   if (wPos.length > 0) {
-    const wGeo = new THREE.BufferGeometry();[cite: 1]
-    wGeo.setAttribute('position', new THREE.Float32BufferAttribute(wPos,3));[cite: 1]
-    wGeo.setAttribute('color', new THREE.Float32BufferAttribute(wCol,3));[cite: 1]
-    wGeo.setAttribute('normal', new THREE.Float32BufferAttribute(wNorm,3));[cite: 1]
+    const wGeo = new THREE.BufferGeometry();
+    wGeo.setAttribute('position', new THREE.Float32BufferAttribute(wPos,3));
+    wGeo.setAttribute('color', new THREE.Float32BufferAttribute(wCol,3));
+    wGeo.setAttribute('normal', new THREE.Float32BufferAttribute(wNorm,3));
     wGeo.setAttribute('uv', new THREE.Float32BufferAttribute(wUV,2));
-    waterMesh = new THREE.Mesh(wGeo, waterMaterial);
-    scene.add(waterMesh);[cite: 1]
+    waterMesh = new THREE.Mesh(wGeo, wMat);
+    scene.add(waterMesh);
   }
 }
 buildMeshes();
 
-// ---------- Player ----------[cite: 1]
-const player = {[cite: 1]
-  pos: new THREE.Vector3(W/2, H, W/2),[cite: 1]
-  vel: new THREE.Vector3(0,0,0),[cite: 1]
-  yaw: Math.PI*0.75,[cite: 1]
-  pitch: -0.2,[cite: 1]
-  onGround: false,[cite: 1]
-  height: 1.7,[cite: 1]
-  radius: 0.3,[cite: 1]
-};[cite: 1]
-(function findSpawn(){[cite: 1]
-  const sx = Math.floor(W/2), sz = Math.floor(W/2);[cite: 1]
-  let sy = H-1;[cite: 1]
-  while (sy>0 && getBlock(sx,sy,sz)===AIR) sy--;[cite: 1]
-  player.pos.set(sx+0.5, sy+3, sz+0.5);[cite: 1]
-})();[cite: 1]
+// ---------- Player ----------
+const player = {
+  pos: new THREE.Vector3(W/2, H, W/2),
+  vel: new THREE.Vector3(0,0,0),
+  yaw: Math.PI*0.75,
+  pitch: -0.2,
+  onGround: false,
+  height: 1.7,
+  radius: 0.3,
+};
+(function findSpawn(){
+  const sx = Math.floor(W/2), sz = Math.floor(W/2);
+  let sy = H-1;
+  while (sy>0 && getBlock(sx,sy,sz)===AIR) sy--;
+  player.pos.set(sx+0.5, sy+3, sz+0.5);
+})();
 
-const GRAVITY = -26;[cite: 1]
-const JUMP_SPEED = 8.4;[cite: 1]
-const MOVE_SPEED = 5.2;[cite: 1]
+const GRAVITY = -26;
+const JUMP_SPEED = 8.4;
+const MOVE_SPEED = 5.2;
 
-const keys = {};[cite: 1]
-document.addEventListener('keydown', e=>{[cite: 1]
-  keys[e.code]=true;[cite: 1]
-  const num = parseInt(e.key);[cite: 1]
-  if (num>=1 && num<=7) selectSlot(num-1);[cite: 1]
-});[cite: 1]
-document.addEventListener('keyup', e=>{ keys[e.code]=false; });[cite: 1]
+const keys = {};
+document.addEventListener('keydown', e=>{
+  keys[e.code]=true;
+  const num = parseInt(e.key);
+  if (num>=1 && num<=7) selectSlot(num-1);
+});
+document.addEventListener('keyup', e=>{ keys[e.code]=false; });
 
-let selected = 0;[cite: 1]
-function selectSlot(i){[cite: 1]
-  selected = ((i%HOTBAR_BLOCKS.length)+HOTBAR_BLOCKS.length)%HOTBAR_BLOCKS.length;[cite: 1]
-  updateHotbarUI();[cite: 1]
-}[cite: 1]
-document.addEventListener('wheel', e=>{[cite: 1]
-  if (document.pointerLockElement) selectSlot(selected + (e.deltaY>0?1:-1));[cite: 1]
-});[cite: 1]
+let selected = 0;
+function selectSlot(i){
+  selected = ((i%HOTBAR_BLOCKS.length)+HOTBAR_BLOCKS.length)%HOTBAR_BLOCKS.length;
+  updateHotbarUI();
+}
+document.addEventListener('wheel', e=>{
+  if (document.pointerLockElement) selectSlot(selected + (e.deltaY>0?1:-1));
+});
 
-function isSolidBlock(b){ return b !== AIR && b !== WATER; }[cite: 1]
+function isSolidBlock(b){ return b !== AIR && b !== WATER; }
 
-function collidesAt(px,py,pz){[cite: 1]
-  const r = player.radius;[cite: 1]
-  const minX = Math.floor(px-r), maxX = Math.floor(px+r);[cite: 1]
-  const minZ = Math.floor(pz-r), maxZ = Math.floor(pz+r);[cite: 1]
-  const minY = Math.floor(py), maxY = Math.floor(py+player.height);[cite: 1]
-  for (let x=minX;x<=maxX;x++)[cite: 1]
-    for (let y=minY;y<=maxY;y++)[cite: 1]
-      for (let z=minZ;z<=maxZ;z++)[cite: 1]
-        if (isSolidBlock(getBlock(x,y,z))) return true;[cite: 1]
-  return false;[cite: 1]
-}[cite: 1]
+function collidesAt(px,py,pz){
+  const r = player.radius;
+  const minX = Math.floor(px-r), maxX = Math.floor(px+r);
+  const minZ = Math.floor(pz-r), maxZ = Math.floor(pz+r);
+  const minY = Math.floor(py), maxY = Math.floor(py+player.height);
+  for (let x=minX;x<=maxX;x++)
+    for (let y=minY;y<=maxY;y++)
+      for (let z=minZ;z<=maxZ;z++)
+        if (isSolidBlock(getBlock(x,y,z))) return true;
+  return false;
+}
 
-function updatePlayer(dt){[cite: 1]
-  const forward = new THREE.Vector3(-Math.sin(player.yaw),0,-Math.cos(player.yaw));[cite: 1]
-  const right = new THREE.Vector3(Math.sin(player.yaw+Math.PI/2),0,Math.cos(player.yaw+Math.PI/2));[cite: 1]
-  let moveX=0, moveZ=0;[cite: 1]
-  if (keys['KeyW']) { moveX+=forward.x; moveZ+=forward.z; }[cite: 1]
-  if (keys['KeyS']) { moveX-=forward.x; moveZ-=forward.z; }[cite: 1]
-  if (keys['KeyD']) { moveX+=right.x; moveZ+=right.z; }[cite: 1]
-  if (keys['KeyA']) { moveX-=right.x; moveZ-=right.z; }[cite: 1]
-  const len = Math.hypot(moveX,moveZ);[cite: 1]
-  if (len>0){ moveX/=len; moveZ/=len; }[cite: 1]
+function updatePlayer(dt){
+  const forward = new THREE.Vector3(-Math.sin(player.yaw),0,-Math.cos(player.yaw));
+  const right = new THREE.Vector3(Math.sin(player.yaw+Math.PI/2),0,Math.cos(player.yaw+Math.PI/2));
+  let moveX=0, moveZ=0;
+  if (keys['KeyW']) { moveX+=forward.x; moveZ+=forward.z; }
+  if (keys['KeyS']) { moveX-=forward.x; moveZ-=forward.z; }
+  if (keys['KeyD']) { moveX+=right.x; moveZ+=right.z; }
+  if (keys['KeyA']) { moveX-=right.x; moveZ-=right.z; }
+  const len = Math.hypot(moveX,moveZ);
+  if (len>0){ moveX/=len; moveZ/=len; }
 
-  player.vel.x = moveX*MOVE_SPEED;[cite: 1]
-  player.vel.z = moveZ*MOVE_SPEED;[cite: 1]
-  player.vel.y += GRAVITY*dt;[cite: 1]
-  if (player.vel.y < -40) player.vel.y = -40;[cite: 1]
+  player.vel.x = moveX*MOVE_SPEED;
+  player.vel.z = moveZ*MOVE_SPEED;
+  player.vel.y += GRAVITY*dt;
+  if (player.vel.y < -40) player.vel.y = -40;
 
-  if (keys['Space'] && player.onGround){[cite: 1]
-    player.vel.y = JUMP_SPEED;[cite: 1]
-    player.onGround = false;[cite: 1]
-  }[cite: 1]
+  if (keys['Space'] && player.onGround){
+    player.vel.y = JUMP_SPEED;
+    player.onGround = false;
+  }
 
-  let nx = player.pos.x + player.vel.x*dt;[cite: 1]
-  if (!collidesAt(nx, player.pos.y, player.pos.z)) player.pos.x = nx;[cite: 1]
-  let nz = player.pos.z + player.vel.z*dt;[cite: 1]
-  if (!collidesAt(player.pos.x, player.pos.y, nz)) player.pos.z = nz;[cite: 1]
+  let nx = player.pos.x + player.vel.x*dt;
+  if (!collidesAt(nx, player.pos.y, player.pos.z)) player.pos.x = nx;
+  let nz = player.pos.z + player.vel.z*dt;
+  if (!collidesAt(player.pos.x, player.pos.y, nz)) player.pos.z = nz;
 
-  let ny = player.pos.y + player.vel.y*dt;[cite: 1]
-  if (!collidesAt(player.pos.x, ny, player.pos.z)) {[cite: 1]
-    player.pos.y = ny;[cite: 1]
-    player.onGround = false;[cite: 1]
-  } else {[cite: 1]
-    if (player.vel.y < 0) player.onGround = true;[cite: 1]
-    player.vel.y = 0;[cite: 1]
-  }[cite: 1]
+  let ny = player.pos.y + player.vel.y*dt;
+  if (!collidesAt(player.pos.x, ny, player.pos.z)) {
+    player.pos.y = ny;
+    player.onGround = false;
+  } else {
+    if (player.vel.y < 0) player.onGround = true;
+    player.vel.y = 0;
+  }
 
-  if (player.pos.y < -10) {[cite: 1]
-    player.pos.set(W/2, H, W/2);[cite: 1]
-    player.vel.set(0,0,0);[cite: 1]
-  }[cite: 1]
+  if (player.pos.y < -10) {
+    player.pos.set(W/2, H, W/2);
+    player.vel.set(0,0,0);
+  }
 
-  camera.position.set(player.pos.x, player.pos.y+player.height, player.pos.z);[cite: 1]
-  camera.rotation.order = 'YXZ';[cite: 1]
-  camera.rotation.y = player.yaw;[cite: 1]
-  camera.rotation.x = player.pitch;[cite: 1]
-}[cite: 1]
+  camera.position.set(player.pos.x, player.pos.y+player.height, player.pos.z);
+  camera.rotation.order = 'YXZ';
+  camera.rotation.y = player.yaw;
+  camera.rotation.x = player.pitch;
+}
 
-// ---------- Name entry, pointer lock + mouse look ----------[cite: 1]
-const canvas = renderer.domElement;[cite: 1]
-const startScreen = document.getElementById('startScreen');[cite: 1]
-const pausedEl = document.getElementById('paused');[cite: 1]
-const startBtn = document.getElementById('startBtn');[cite: 1]
-const nameInput = document.getElementById('nameInput');[cite: 1]
-const nameError = document.getElementById('nameError');[cite: 1]
+// ---------- Name entry, pointer lock + mouse look ----------
+const canvas = renderer.domElement;
+const startScreen = document.getElementById('startScreen');
+const pausedEl = document.getElementById('paused');
+const startBtn = document.getElementById('startBtn');
+const nameInput = document.getElementById('nameInput');
+const nameError = document.getElementById('nameError');
 
-nameInput.addEventListener('keydown', e=>{[cite: 1]
-  if (e.key === 'Enter') startBtn.click();[cite: 1]
-});[cite: 1]
+nameInput.addEventListener('keydown', e=>{
+  if (e.key === 'Enter') startBtn.click();
+});
 
-let gameStarted = false;[cite: 1]
+let gameStarted = false;
 
-startBtn.addEventListener('click', ()=>{[cite: 1]
-  const name = nameInput.value.trim().slice(0,10);[cite: 1]
-  if (!name) {[cite: 1]
-    nameError.classList.add('show');[cite: 1]
-    nameInput.focus();[cite: 1]
-    return;[cite: 1]
-  }[cite: 1]
-  nameError.classList.remove('show');[cite: 1]
-  playerName = name;[cite: 1]
-  myId = 'p_' + Math.random().toString(36).slice(2,10) + Date.now().toString(36);[cite: 1]
-  myColor = colorForId(myId);[cite: 1]
-  updateOnlineListUI({});[cite: 1]
-  joinMultiplayer();[cite: 1]
-  canvas.requestPointerLock();[cite: 1]
-});[cite: 1]
-canvas.addEventListener('click', ()=>{[cite: 1]
-  if (!document.pointerLockElement && gameStarted) canvas.requestPointerLock();[cite: 1]
-});[cite: 1]
-document.addEventListener('pointerlockchange', ()=>{[cite: 1]
-  const locked = document.pointerLockElement === canvas;[cite: 1]
-  if (locked) { gameStarted = true; }[cite: 1]
-  startScreen.style.display = locked ? 'none' : (gameStarted ? 'none' : 'flex');[cite: 1]
-  pausedEl.style.display = (!locked && gameStarted) ? 'flex' : 'none';[cite: 1]
-});[cite: 1]
+startBtn.addEventListener('click', ()=>{
+  const name = nameInput.value.trim().slice(0,10);
+  if (!name) {
+    nameError.classList.add('show');
+    nameInput.focus();
+    return;
+  }
+  nameError.classList.remove('show');
+  playerName = name;
+  myId = 'p_' + Math.random().toString(36).slice(2,10) + Date.now().toString(36);
+  myColor = colorForId(myId);
+  updateOnlineListUI({});
+  joinMultiplayer();
+  
+  // ★解決策: ポインターロック要求より先にゲーム開始ステートを確定させて画面の表示を確実に切り替える
+  gameStarted = true;
+  startScreen.style.display = 'none';
+  canvas.requestPointerLock();
+});
+canvas.addEventListener('click', ()=>{
+  if (!document.pointerLockElement && gameStarted) canvas.requestPointerLock();
+});
+document.addEventListener('pointerlockchange', ()=>{
+  const locked = document.pointerLockElement === canvas;
+  startScreen.style.display = locked ? 'none' : (gameStarted ? 'none' : 'flex');
+  pausedEl.style.display = (!locked && gameStarted) ? 'flex' : 'none';
+});
 
-document.addEventListener('mousemove', e=>{[cite: 1]
-  if (document.pointerLockElement !== canvas) return;[cite: 1]
-  player.yaw -= e.movementX * 0.0022;[cite: 1]
-  player.pitch -= e.movementY * 0.0022;[cite: 1]
-  const lim = Math.PI/2 - 0.05;[cite: 1]
-  player.pitch = Math.max(-lim, Math.min(lim, player.pitch));[cite: 1]
-});[cite: 1]
+document.addEventListener('mousemove', e=>{
+  if (document.pointerLockElement !== canvas) return;
+  player.yaw -= e.movementX * 0.0022;
+  player.pitch -= e.movementY * 0.0022;
+  const lim = Math.PI/2 - 0.05;
+  player.pitch = Math.max(-lim, Math.min(lim, player.pitch));
+});
 
-// ---------- Block interaction (voxel raycast, DDA) ----------[cite: 1]
-function raycastVoxel(maxDist){[cite: 1]
-  const dir = new THREE.Vector3();[cite: 1]
-  camera.getWorldDirection(dir);[cite: 1]
-  const origin = camera.position.clone();[cite: 1]
+// ---------- Block interaction (voxel raycast, DDA) ----------
+function raycastVoxel(maxDist){
+  const dir = new THREE.Vector3();
+  camera.getWorldDirection(dir);
+  const origin = camera.position.clone();
 
-  let x = Math.floor(origin.x), y = Math.floor(origin.y), z = Math.floor(origin.z);[cite: 1]
-  const stepX = dir.x>0?1:-1, stepY = dir.y>0?1:-1, stepZ = dir.z>0?1:-1;[cite: 1]
+  let x = Math.floor(origin.x), y = Math.floor(origin.y), z = Math.floor(origin.z);
+  const stepX = dir.x>0?1:-1, stepY = dir.y>0?1:-1, stepZ = dir.z>0?1:-1;
 
-  function tDelta(d){ return d===0 ? Infinity : Math.abs(1/d); }[cite: 1]
-  const tDeltaX = tDelta(dir.x), tDeltaY = tDelta(dir.y), tDeltaZ = tDelta(dir.z);[cite: 1]
+  function tDelta(d){ return d===0 ? Infinity : Math.abs(1/d); }
+  const tDeltaX = tDelta(dir.x), tDeltaY = tDelta(dir.y), tDeltaZ = tDelta(dir.z);
 
-  function firstT(o, d, step){[cite: 1]
-    if (d===0) return Infinity;[cite: 1]
-    const boundary = step>0 ? Math.floor(o)+1 : Math.ceil(o)-1;[cite: 1]
-    return (boundary - o)/d;[cite: 1]
-  }[cite: 1]
-  let tMaxX = firstT(origin.x, dir.x, stepX);[cite: 1]
-  let tMaxY = firstT(origin.y, dir.y, stepY);[cite: 1]
-  let tMaxZ = firstT(origin.z, dir.z, stepZ);[cite: 1]
+  function firstT(o, d, step){
+    if (d===0) return Infinity;
+    const boundary = step>0 ? Math.floor(o)+1 : Math.ceil(o)-1;
+    return (boundary - o)/d;
+  }
+  let tMaxX = firstT(origin.x, dir.x, stepX);
+  let tMaxY = firstT(origin.y, dir.y, stepY);
+  let tMaxZ = firstT(origin.z, dir.z, stepZ);
 
-  let dist = 0;[cite: 1]
-  let lastNormal = [0,0,0];[cite: 1]
-  while (dist < maxDist) {[cite: 1]
-    const b = getBlock(x,y,z);[cite: 1]
-    if (isSolidBlock(b)) {[cite: 1]
-      return { x,y,z, normal:lastNormal, block:b };[cite: 1]
-    }[cite: 1]
-    if (tMaxX < tMaxY && tMaxX < tMaxZ) {[cite: 1]
-      x += stepX; dist = tMaxX; tMaxX += tDeltaX; lastNormal=[-stepX,0,0];[cite: 1]
-    } else if (tMaxY < tMaxZ) {[cite: 1]
-      y += stepY; dist = tMaxY; tMaxY += tDeltaY; lastNormal=[0,-stepY,0];[cite: 1]
-    } else {[cite: 1]
-      z += stepZ; dist = tMaxZ; tMaxZ += tDeltaZ; lastNormal=[0,0,-stepZ];[cite: 1]
-    }[cite: 1]
-  }[cite: 1]
-  return null;[cite: 1]
-}[cite: 1]
+  let dist = 0;
+  let lastNormal = [0,0,0];
+  while (dist < maxDist) {
+    const b = getBlock(x,y,z);
+    if (isSolidBlock(b)) {
+      return { x,y,z, normal:lastNormal, block:b };
+    }
+    if (tMaxX < tMaxY && tMaxX < tMaxZ) {
+      x += stepX; dist = tMaxX; tMaxX += tDeltaX; lastNormal=[-stepX,0,0];
+    } else if (tMaxY < tMaxZ) {
+      y += stepY; dist = tMaxY; tMaxY += tDeltaY; lastNormal=[0,-stepY,0];
+    } else {
+      z += stepZ; dist = tMaxZ; tMaxZ += tDeltaZ; lastNormal=[0,0,-stepZ];
+    }
+  }
+  return null;
+}
 
-function collidesAtBlockPlace(bx,by,bz){[cite: 1]
-  const r = player.radius;[cite: 1]
-  const minX = Math.floor(player.pos.x-r), maxX = Math.floor(player.pos.x+r);[cite: 1]
-  const minZ = Math.floor(player.pos.z-r), maxZ = Math.floor(player.pos.z+r);[cite: 1]
-  const minY = Math.floor(player.pos.y), maxY = Math.floor(player.pos.y+player.height);[cite: 1]
-  return bx>=minX && bx<=maxX && by>=minY && by<=maxY && bz>=minZ && bz<=maxZ;[cite: 1]
-}[cite: 1]
+function collidesAtBlockPlace(bx,by,bz){
+  const r = player.radius;
+  const minX = Math.floor(player.pos.x-r), maxX = Math.floor(player.pos.x+r);
+  const minZ = Math.floor(player.pos.z-r), maxZ = Math.floor(player.pos.z+r);
+  const minY = Math.floor(player.pos.y), maxY = Math.floor(player.pos.y+player.height);
+  return bx>=minX && bx<=maxX && by>=minY && by<=maxY && bz>=minZ && bz<=maxZ;
+}
 
-canvas.addEventListener('mousedown', e=>{[cite: 1]
-  if (document.pointerLockElement !== canvas) return;[cite: 1]
-  const hit = raycastVoxel(7);[cite: 1]
-  if (!hit) return;[cite: 1]
-  if (e.button === 0) {[cite: 1]
-    setBlock(hit.x, hit.y, hit.z, AIR);[cite: 1]
-    dirty = true;[cite: 1]
-    pushBlockEdit(hit.x, hit.y, hit.z, AIR);[cite: 1]
-  } else if (e.button === 2) {[cite: 1]
-    const px = hit.x+hit.normal[0], py = hit.y+hit.normal[1], pz = hit.z+hit.normal[2];[cite: 1]
-    if (!collidesAtBlockPlace(px,py,pz)) {[cite: 1]
-      const block = HOTBAR_BLOCKS[selected];[cite: 1]
-      setBlock(px,py,pz, block);[cite: 1]
-      dirty = true;[cite: 1]
-      pushBlockEdit(px,py,pz, block);[cite: 1]
-    }[cite: 1]
-  }[cite: 1]
-});[cite: 1]
-canvas.addEventListener('contextmenu', e=> e.preventDefault());[cite: 1]
+canvas.addEventListener('mousedown', e=>{
+  if (document.pointerLockElement !== canvas) return;
+  const hit = raycastVoxel(7);
+  if (!hit) return;
+  if (e.button === 0) {
+    setBlock(hit.x, hit.y, hit.z, AIR);
+    dirty = true;
+    pushBlockEdit(hit.x, hit.y, hit.z, AIR);
+  } else if (e.button === 2) {
+    const px = hit.x+hit.normal[0], py = hit.y+hit.normal[1], pz = hit.z+hit.normal[2];
+    if (!collidesAtBlockPlace(px,py,pz)) {
+      const block = HOTBAR_BLOCKS[selected];
+      setBlock(px,py,pz, block);
+      dirty = true;
+      pushBlockEdit(px,py,pz, block);
+    }
+  }
+});
+canvas.addEventListener('contextmenu', e=> e.preventDefault());
 
-// ---------- Multiplayer (Firebase Realtime Database) ----------[cite: 1]
-function pushBlockEdit(x,y,z,val){[cite: 1]
-  if (!fbReady || !db) return;[cite: 1]
-  try { db.ref(blocksPath + '/' + x + '_' + y + '_' + z).set(val); }[cite: 1]
-  catch(e) { console.warn('block sync failed', e); }[cite: 1]
-}[cite: 1]
+// ---------- Multiplayer (Firebase Realtime Database) ----------
+function pushBlockEdit(x,y,z,val){
+  if (!fbReady || !db) return;
+  try { db.ref(blocksPath + '/' + x + '_' + y + '_' + z).set(val); }
+  catch(e) { console.warn('block sync failed', e); }
+}
 
-function onBlockEdit(snap){[cite: 1]
-  const key = snap.key;[cite: 1]
-  const parts = key.split('_').map(Number);[cite: 1]
-  if (parts.length !== 3) return;[cite: 1]
-  setBlock(parts[0], parts[1], parts[2], snap.val());[cite: 1]
-  dirty = true;[cite: 1]
-}[cite: 1]
+function onBlockEdit(snap){
+  const key = snap.key;
+  const parts = key.split('_').map(Number);
+  if (parts.length !== 3) return;
+  setBlock(parts[0], parts[1], parts[2], snap.val());
+  dirty = true;
+}
 
-function joinMultiplayer(){[cite: 1]
-  if (!fbReady || !db) {[cite: 1]
-    document.getElementById('onlineList').innerHTML = '<div class="onlineTitle">オフライン(1人プレイ)</div>';[cite: 1]
-    return;[cite: 1]
-  }[cite: 1]
-  try {[cite: 1]
-    playerRef = db.ref(playersPath + '/' + myId);[cite: 1]
-    playerRef.onDisconnect().remove();[cite: 1]
-    playerRef.set({[cite: 1]
-      name: playerName,[cite: 1]
-      color: myColor,[cite: 1]
-      x: player.pos.x, y: player.pos.y, z: player.pos.z,[cite: 1]
-      yaw: player.yaw, pitch: player.pitch,[cite: 1]
-      ts: Date.now()[cite: 1]
-    });[cite: 1]
+function joinMultiplayer(){
+  if (!fbReady || !db) {
+    document.getElementById('onlineList').innerHTML = '<div class="onlineTitle">オフライン(1人プレイ)</div>';
+    return;
+  }
+  try {
+    playerRef = db.ref(playersPath + '/' + myId);
+    playerRef.onDisconnect().remove();
+    playerRef.set({
+      name: playerName,
+      color: myColor,
+      x: player.pos.x, y: player.pos.y, z: player.pos.z,
+      yaw: player.yaw, pitch: player.pitch,
+      ts: Date.now()
+    });
 
-    db.ref(playersPath).on('value', snap=>{[cite: 1]
-      updateRemotePlayers(snap.val() || {});[cite: 1]
-    });[cite: 1]
+    db.ref(playersPath).on('value', snap=>{
+      updateRemotePlayers(snap.val() || {});
+    });
 
-    db.ref(blocksPath).once('value').then(snap=>{[cite: 1]
-      const val = snap.val() || {};[cite: 1]
-      for (const key in val) {[cite: 1]
-        const parts = key.split('_').map(Number);[cite: 1]
-        if (parts.length === 3) setBlock(parts[0], parts[1], parts[2], val[key]);[cite: 1]
-      }[cite: 1]
-      dirty = true;[cite: 1]
-      db.ref(blocksPath).on('child_added', onBlockEdit);[cite: 1]
-      db.ref(blocksPath).on('child_changed', onBlockEdit);[cite: 1]
-    }).catch(e=> console.warn('block load failed', e));[cite: 1]
-  } catch(e) {[cite: 1]
-    console.warn('multiplayer join failed', e);[cite: 1]
-    document.getElementById('onlineList').innerHTML = '<div class="onlineTitle">オフライン(1人プレイ)</div>';[cite: 1]
-  }[cite: 1]
-}[cite: 1]
+    db.ref(blocksPath).once('value').then(snap=>{
+      const val = snap.val() || {};
+      for (const key in val) {
+        const parts = key.split('_').map(Number);
+        if (parts.length === 3) setBlock(parts[0], parts[1], parts[2], val[key]);
+      }
+      dirty = true;
+      db.ref(blocksPath).on('child_added', onBlockEdit);
+      db.ref(blocksPath).on('child_changed', onBlockEdit);
+    }).catch(e=> console.warn('block load failed', e));
+  } catch(e) {
+    console.warn('multiplayer join failed', e);
+    document.getElementById('onlineList').innerHTML = '<div class="onlineTitle">オフライン(1人プレイ)</div>';
+  }
+}
 
-window.addEventListener('beforeunload', ()=>{[cite: 1]
-  if (playerRef) { try { playerRef.remove(); } catch(e){} }[cite: 1]
-});[cite: 1]
+window.addEventListener('beforeunload', ()=>{
+  if (playerRef) { try { playerRef.remove(); } catch(e){} }
+});
 
-// ---------- Remote player avatars ----------[cite: 1]
-const remotePlayers = {}; // id -> { group, target:{x,y,z,yaw} }[cite: 1]
+// ---------- Remote player avatars ----------
+const remotePlayers = {}; // id -> { group, target:{x,y,z,yaw} }
 
-function makeNameSprite(name){[cite: 1]
-  const cnv = document.createElement('canvas');[cite: 1]
-  cnv.width = 256; cnv.height = 64;[cite: 1]
-  const ctx = cnv.getContext('2d');[cite: 1]
-  ctx.fillStyle = 'rgba(0,0,0,0.45)';[cite: 1]
-  ctx.fillRect(0,0,256,64);[cite: 1]
-  ctx.fillStyle = '#ffffff';[cite: 1]
-  ctx.font = 'bold 30px sans-serif';[cite: 1]
-  ctx.textAlign = 'center';[cite: 1]
-  ctx.textBaseline = 'middle';[cite: 1]
-  ctx.fillText(String(name).slice(0,14), 128, 32);[cite: 1]
-  const tex = new THREE.CanvasTexture(cnv);[cite: 1]
-  const mat = new THREE.SpriteMaterial({ map:tex, depthTest:false });[cite: 1]
-  const sprite = new THREE.Sprite(mat);[cite: 1]
-  sprite.scale.set(1.6,0.4,1);[cite: 1]
-  sprite.position.set(0, 2.05, 0);[cite: 1]
-  return sprite;[cite: 1]
-}[cite: 1]
+function makeNameSprite(name){
+  const cnv = document.createElement('canvas');
+  cnv.width = 256; cnv.height = 64;
+  const ctx = cnv.getContext('2d');
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillRect(0,0,256,64);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 30px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(name).slice(0,14), 128, 32);
+  const tex = new THREE.CanvasTexture(cnv);
+  const mat = new THREE.SpriteMaterial({ map:tex, depthTest:false });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(1.6,0.4,1);
+  sprite.position.set(0, 2.05, 0);
+  return sprite;
+}
 
 function makeAvatar(name, colorCss){
-  const group = new THREE.Group();[cite: 1]
+  const group = new THREE.Group();
   
   const steveMat = new THREE.MeshLambertMaterial({ 
     map: steveTexture,
@@ -743,150 +741,150 @@ function makeAvatar(name, colorCss){
   });
   
   const body = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1.2, 0.25), steveMat);
-  body.position.y = 0.9; 
-  group.add(body);[cite: 1]
+  body.position.y = 0.9;
+  group.add(body);
   
   const head = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), steveMat);
   head.position.y = 1.75;
-  group.add(head);[cite: 1]
+  group.add(head);
   
-  group.add(makeNameSprite(name));[cite: 1]
-  return group;[cite: 1]
+  group.add(makeNameSprite(name));
+  return group;
 }
 
-function updateRemotePlayers(playersVal){[cite: 1]
-  const seen = new Set();[cite: 1]
-  for (const id in playersVal) {[cite: 1]
-    if (id === myId) continue;[cite: 1]
-    const p = playersVal[id];[cite: 1]
-    if (!p) continue;[cite: 1]
-    seen.add(id);[cite: 1]
-    let rp = remotePlayers[id];[cite: 1]
-    const color = (p.color && typeof p.color === 'string') ? p.color : colorForId(id);[cite: 1]
-    if (!rp) {[cite: 1]
-      const group = makeAvatar(p.name || '???', color);[cite: 1]
-      scene.add(group);[cite: 1]
-      rp = remotePlayers[id] = { group, target: {x:p.x||0,y:p.y||0,z:p.z||0,yaw:p.yaw||0} };[cite: 1]
-      group.position.set(rp.target.x, rp.target.y, rp.target.z);[cite: 1]
-      group.rotation.y = rp.target.yaw;[cite: 1]
-    }[cite: 1]
-    rp.target.x = p.x||0; rp.target.y = p.y||0; rp.target.z = p.z||0; rp.target.yaw = p.yaw||0;[cite: 1]
-  }[cite: 1]
-  for (const id in remotePlayers) {[cite: 1]
-    if (!seen.has(id)) {[cite: 1]
-      scene.remove(remotePlayers[id].group);[cite: 1]
-      delete remotePlayers[id];[cite: 1]
-    }[cite: 1]
-  }[cite: 1]
-  updateOnlineListUI(playersVal);[cite: 1]
-}[cite: 1]
+function updateRemotePlayers(playersVal){
+  const seen = new Set();
+  for (const id in playersVal) {
+    if (id === myId) continue;
+    const p = playersVal[id];
+    if (!p) continue;
+    seen.add(id);
+    let rp = remotePlayers[id];
+    const color = (p.color && typeof p.color === 'string') ? p.color : colorForId(id);
+    if (!rp) {
+      const group = makeAvatar(p.name || '???', color);
+      scene.add(group);
+      rp = remotePlayers[id] = { group, target: {x:p.x||0,y:p.y||0,z:p.z||0,yaw:p.yaw||0} };
+      group.position.set(rp.target.x, rp.target.y, rp.target.z);
+      group.rotation.y = rp.target.yaw;
+    }
+    rp.target.x = p.x||0; rp.target.y = p.y||0; rp.target.z = p.z||0; rp.target.yaw = p.yaw||0;
+  }
+  for (const id in remotePlayers) {
+    if (!seen.has(id)) {
+      scene.remove(remotePlayers[id].group);
+      delete remotePlayers[id];
+    }
+  }
+  updateOnlineListUI(playersVal);
+}
 
-function tickRemotePlayers(dt){[cite: 1]
-  const t = Math.min(1, dt*10);[cite: 1]
-  for (const id in remotePlayers) {[cite: 1]
-    const rp = remotePlayers[id];[cite: 1]
-    const g = rp.group, tg = rp.target;[cite: 1]
-    g.position.x += (tg.x - g.position.x) * t;[cite: 1]
-    g.position.y += (tg.y - g.position.y) * t;[cite: 1]
-    g.position.z += (tg.z - g.position.z) * t;[cite: 1]
-    let dy = tg.yaw - g.rotation.y;[cite: 1]
-    while (dy > Math.PI) dy -= Math.PI*2;[cite: 1]
-    while (dy < -Math.PI) dy += Math.PI*2;[cite: 1]
-    g.rotation.y += dy * t;[cite: 1]
-  }[cite: 1]
-}[cite: 1]
+function tickRemotePlayers(dt){
+  const t = Math.min(1, dt*10);
+  for (const id in remotePlayers) {
+    const rp = remotePlayers[id];
+    const g = rp.group, tg = rp.target;
+    g.position.x += (tg.x - g.position.x) * t;
+    g.position.y += (tg.y - g.position.y) * t;
+    g.position.z += (tg.z - g.position.z) * t;
+    let dy = tg.yaw - g.rotation.y;
+    while (dy > Math.PI) dy -= Math.PI*2;
+    while (dy < -Math.PI) dy += Math.PI*2;
+    g.rotation.y += dy * t;
+  }
+}
 
-function updateOnlineListUI(playersVal){[cite: 1]
-  const el = document.getElementById('onlineList');[cite: 1]
-  el.innerHTML = '';[cite: 1]
-  const title = document.createElement('div');[cite: 1]
-  title.className = 'onlineTitle';[cite: 1]
-  title.textContent = 'オンライン';[cite: 1]
-  el.appendChild(title);[cite: 1]
-  function addRow(name, color){[cite: 1]
-    const row = document.createElement('div');[cite: 1]
-    row.className = 'onlineRow';[cite: 1]
-    const dot = document.createElement('span');[cite: 1]
-    dot.className = 'onlineDot';[cite: 1]
-    dot.style.background = color;[cite: 1]
-    const label = document.createElement('span');[cite: 1]
-    label.textContent = String(name).slice(0,14);[cite: 1]
-    row.appendChild(label);[cite: 1]
-    row.appendChild(dot);[cite: 1]
-    el.appendChild(row);[cite: 1]
-  }[cite: 1]
-  addRow(playerName + ' (自分)', myColor);[cite: 1]
-  for (const id in playersVal) {[cite: 1]
-    if (id === myId) continue;[cite: 1]
-    const p = playersVal[id];[cite: 1]
-    if (p) addRow(p.name || '???', p.color || colorForId(id));[cite: 1]
-  }[cite: 1]
-}[cite: 1]
+function updateOnlineListUI(playersVal){
+  const el = document.getElementById('onlineList');
+  el.innerHTML = '';
+  const title = document.createElement('div');
+  title.className = 'onlineTitle';
+  title.textContent = 'オンライン';
+  el.appendChild(title);
+  function addRow(name, color){
+    const row = document.createElement('div');
+    row.className = 'onlineRow';
+    const dot = document.createElement('span');
+    dot.className = 'onlineDot';
+    dot.style.background = color;
+    const label = document.createElement('span');
+    label.textContent = String(name).slice(0,14);
+    row.appendChild(label);
+    row.appendChild(dot);
+    el.appendChild(row);
+  }
+  addRow(playerName + ' (自分)', myColor);
+  for (const id in playersVal) {
+    if (id === myId) continue;
+    const p = playersVal[id];
+    if (p) addRow(p.name || '???', p.color || colorForId(id));
+  }
+}
 
-// ---------- Hotbar UI ----------[cite: 1]
-const hotbarEl = document.getElementById('hotbar');[cite: 1]
-function updateHotbarUI(){[cite: 1]
-  hotbarEl.innerHTML = '';[cite: 1]
-  HOTBAR_BLOCKS.forEach((b,i)=>{[cite: 1]
-    const slot = document.createElement('div');[cite: 1]
-    slot.className = 'slot' + (i===selected?' active':'');[cite: 1]
-    const c = BASE_COLOR[b];[cite: 1]
-    slot.style.background = `rgb(${Math.floor(c[0]*255)},${Math.floor(c[1]*255)},${Math.floor(c[2]*255)})`;[cite: 1]
-    const label = document.createElement('span');[cite: 1]
-    label.textContent = (i+1);[cite: 1]
-    slot.appendChild(label);[cite: 1]
-    slot.title = BLOCK_NAMES[b];[cite: 1]
-    hotbarEl.appendChild(slot);[cite: 1]
-  });[cite: 1]
-}[cite: 1]
-updateHotbarUI();[cite: 1]
+// ---------- Hotbar UI ----------
+const hotbarEl = document.getElementById('hotbar');
+function updateHotbarUI(){
+  hotbarEl.innerHTML = '';
+  HOTBAR_BLOCKS.forEach((b,i)=>{
+    const slot = document.createElement('div');
+    slot.className = 'slot' + (i===selected?' active':'');
+    const c = BASE_COLOR[b];
+    slot.style.background = `rgb(${Math.floor(c[0]*255)},${Math.floor(c[1]*255)},${Math.floor(c[2]*255)})`;
+    const label = document.createElement('span');
+    label.textContent = (i+1);
+    slot.appendChild(label);
+    slot.title = BLOCK_NAMES[b];
+    hotbarEl.appendChild(slot);
+  });
+}
+updateHotbarUI();
 
-// ---------- HUD ----------[cite: 1]
-const hudEl = document.getElementById('hud');[cite: 1]
-function updateHud(fps){[cite: 1]
-  hudEl.innerHTML =[cite: 1]
-    `座標: X ${player.pos.x.toFixed(1)}  Y ${player.pos.y.toFixed(1)}  Z ${player.pos.z.toFixed(1)}<br>` +[cite: 1]
-    `選択中: ${BLOCK_NAMES[HOTBAR_BLOCKS[selected]]}<br>` +[cite: 1]
-    `FPS: ${fps}`;[cite: 1]
-}[cite: 1]
+// ---------- HUD ----------
+const hudEl = document.getElementById('hud');
+function updateHud(fps){
+  hudEl.innerHTML =
+    `座標: X ${player.pos.x.toFixed(1)}  Y ${player.pos.y.toFixed(1)}  Z ${player.pos.z.toFixed(1)}<br>` +
+    `選択中: ${BLOCK_NAMES[HOTBAR_BLOCKS[selected]]}<br>` +
+    `FPS: ${fps}`;
+}
 
-// ---------- Resize ----------[cite: 1]
-window.addEventListener('resize', ()=>{[cite: 1]
-  camera.aspect = window.innerWidth/window.innerHeight;[cite: 1]
-  camera.updateProjectionMatrix();[cite: 1]
-  renderer.setSize(window.innerWidth, window.innerHeight);[cite: 1]
-});[cite: 1]
+// ---------- Resize ----------
+window.addEventListener('resize', ()=>{
+  camera.aspect = window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
 
-// ---------- Main loop ----------[cite: 1]
-let lastTime = performance.now();[cite: 1]
-let frameCount = 0, fpsTimer = 0, fps = 0;[cite: 1]
-let lastNetSend = 0;[cite: 1]
+// ---------- Main loop ----------
+let lastTime = performance.now();
+let frameCount = 0, fpsTimer = 0, fps = 0;
+let lastNetSend = 0;
 
-function animate(now){[cite: 1]
-  requestAnimationFrame(animate);[cite: 1]
-  const dt = Math.min((now - lastTime)/1000, 0.05);[cite: 1]
-  lastTime = now;[cite: 1]
+function animate(now){
+  requestAnimationFrame(animate);
+  const dt = Math.min((now - lastTime)/1000, 0.05);
+  lastTime = now;
 
-  if (document.pointerLockElement === canvas) {[cite: 1]
-    updatePlayer(dt);[cite: 1]
-    if (fbReady && playerRef && now - lastNetSend > 100) {[cite: 1]
-      lastNetSend = now;[cite: 1]
-      playerRef.update({[cite: 1]
-        x: player.pos.x, y: player.pos.y, z: player.pos.z,[cite: 1]
-        yaw: player.yaw, pitch: player.pitch, ts: Date.now()[cite: 1]
-      }).catch(()=>{});[cite: 1]
-    }[cite: 1]
-  }[cite: 1]
-  tickRemotePlayers(dt);[cite: 1]
-  if (dirty) { buildMeshes(); dirty = false; }[cite: 1]
+  if (document.pointerLockElement === canvas) {
+    updatePlayer(dt);
+    if (fbReady && playerRef && now - lastNetSend > 100) {
+      lastNetSend = now;
+      playerRef.update({
+        x: player.pos.x, y: player.pos.y, z: player.pos.z,
+        yaw: player.yaw, pitch: player.pitch, ts: Date.now()
+      }).catch(()=>{});
+    }
+  }
+  tickRemotePlayers(dt);
+  if (dirty) { buildMeshes(); dirty = false; }
 
-  frameCount++; fpsTimer += dt;[cite: 1]
-  if (fpsTimer >= 0.5) { fps = Math.round(frameCount/fpsTimer); frameCount=0; fpsTimer=0; }[cite: 1]
-  updateHud(fps);[cite: 1]
+  frameCount++; fpsTimer += dt;
+  if (fpsTimer >= 0.5) { fps = Math.round(frameCount/fpsTimer); frameCount=0; fpsTimer=0; }
+  updateHud(fps);
 
-  renderer.render(scene, camera);[cite: 1]
-}[cite: 1]
-requestAnimationFrame(animate);[cite: 1]
+  renderer.render(scene, camera);
+}
+requestAnimationFrame(animate);
 
 })();
 </script>
