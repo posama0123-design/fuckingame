@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minecraft rd-132211 - Multiplayer Edition</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #80a0ff;
+            font-family: monospace;
+        }
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 16px;
+            height: 16px;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+        }
+        #crosshair::before, #crosshair::after {
+            content: '';
+            position: absolute;
+            background: white;
+            mix-blend-mode: difference;
+        }
+        #crosshair::before { top: 7px; left: 0; width: 16px; height: 2px; }
+        #crosshair::after { top: 0; left: 7px; width: 2px; height: 16px; }
+    </style>
+    <!-- Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="crosshair"></div>
+
+    <script type="module">
+        // --- Firebase 連携設定 ---
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-app.js";
+        import {
+            getDatabase,
+            ref,
+            set,
+            onValue,
+            remove,
+            onDisconnect
+        } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-database.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyAKf-iBYV_X3aJfpK2pfkBPFVoNcPC1lSU",
+            authDomain: "my-ktty.firebaseapp.com",
+            databaseURL: "https://my-ktty-default-rtdb.firebaseio.com",
+            projectId: "my-ktty",
+            storageBucket: "my-ktty.firebasestorage.app",
+            messagingSenderId: "313123611276",
+            appId: "1:313123611276:web:a625bdb2844f5864c551a9"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+        const playerId = crypto.randomUUID();
+
+        // 他プレイヤーの3Dモデルを管理するオブジェクト
+        const otherPlayers = {};
+
+        // 自分の位置をFirebaseに送信
+        function updatePlayerNetwork(x, y, z, yaw) {
+            set(ref(db, "players/" + playerId), { x, y, z, yaw });
+        }
+
+        // 切断時にFirebaseから自分を削除
+        onDisconnect(ref(db, "players/" + playerId)).remove();
+
+        // --- Three.js 基本設定 ---
+        const WIDTH = window.innerWidth;
+        const HEIGHT = window.innerHeight;
+        
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x80a0ff);
+        scene.fog = new THREE.Fog(0x80a0ff, 60, 160);
+
+        const camera = new THREE.PerspectiveCamera(75, WIDTH / HEIGHT, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: false }); 
+        renderer.setSize(WIDTH, HEIGHT);
+        document.body.appendChild(renderer.domElement);
+
+        // --- 光源 ---
+        const ambientLight = new THREE.AmbientLight(0xdddddd); 
+        scene.add(ambientLight);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.4);
+        directionalLight.position.set(0.6, 1.0, 0.4).normalize();
+        scene.add(directionalLight);
+
+        // --- テクスチャ生成 ---
+        function createFaithfulTexture(type) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 16; canvas.height = 16;
+            const ctx = canvas.getContext('2d');
+            const rand = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+
+            if (type === 'grass_top') {
+                for(let x=0; x<16; x++) {
+                    for(let y=0; y<16; y++) {
+                        let c = rand(105, 145);
+                        ctx.fillStyle = `rgb(${Math.floor(c*0.65)}, ${c}, ${Math.floor(c*0.35)})`;
+                        ctx.fillRect(x, y, 1, 1);
+                    }
+                }
+            } else if (type === 'dirt') {
+                for(let x=0; x<16; x++) {
+                    for(let y=0; y<16; y++) {
+                        let c = rand(85, 115);
+                        ctx.fillStyle = `rgb(${c}, ${Math.floor(c*0.72)}, ${Math.floor(c*0.5)})`;
+                        ctx.fillRect(x, y, 1, 1);
+                    }
+                }
+            } else if (type === 'grass_side') {
+                for(let x=0; x<16; x++) {
+                    let grassDepth = 4 + (x % 2 === 0 ? 1 : 0) + (x % 3 === 0 ? 1 : 0);
+                    if(x === 5 || x === 11) grassDepth += 1;
+                    for(let y=0; y<16; y++) {
+                        if (y < grassDepth) {
+                            let c = rand(105, 145);
+                            ctx.fillStyle = `rgb(${Math.floor(c*0.65)}, ${c}, ${Math.floor(c*0.35)})`;
+                        } else {
+                            let c = rand(85, 115);
+                            ctx.fillStyle = `rgb(${c}, ${Math.floor(c*0.72)}, ${Math.floor(c*0.5)})`;
+                        }
+                        ctx.fillRect(x, y, 1, 1);
+                    }
+                }
+            } else if (type === 'stone') {
+                for(let x=0; x<16; x++) {
+                    for(let y=0; y<16; y++) {
+                        let c = rand(100, 135);
+                        if(Math.random() < 0.14) c -= 30;
+                        if(Math.random() < 0.08) c += 20;
+                        ctx.fillStyle = `rgb(${c}, ${c}, ${c})`;
+                        ctx.fillRect(x, y, 1, 1);
+                    }
+                }
+            }
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.magFilter = THREE.NearestFilter; 
+            texture.minFilter = THREE.NearestFilter;
+            return texture;
+        }
+
+        const textures = {
+            grassTop: createFaithfulTexture('grass_top'),
+            grassSide: createFaithfulTexture('grass_side'),
+            dirt: createFaithfulTexture('dirt'),
+            stone: createFaithfulTexture('stone')
+        };
+
+        const materials = {
+            grass: [
+                new THREE.MeshLambertMaterial({ map: textures.grassSide }),
+                new THREE.MeshLambertMaterial({ map: textures.grassSide }),
+                new THREE.MeshLambertMaterial({ map: textures.grassTop }), 
+                new THREE.MeshLambertMaterial({ map: textures.dirt }),      
+                new THREE.MeshLambertMaterial({ map: textures.grassSide }),
+                new THREE.MeshLambertMaterial({ map: textures.grassSide })
+            ],
+            stone: Array(6).fill(new THREE.MeshLambertMaterial({ map: textures.stone }))
+        };
+
+        // --- ワールドデータ構成 (80x80) ---
+        const worldSize = 80;
+        const worldHeight = 6;
+        const blockGeo = new THREE.BoxGeometry(1, 1, 1);
+        
+        const worldData = {}; 
+        const maxBlocksPerType = worldSize * worldSize * worldHeight * 2; // 置くことも考慮してバッファ拡張
+
+        const instancedMeshes = {
+            grass: new THREE.InstancedMesh(blockGeo, materials.grass, maxBlocksPerType),
+            stone: new THREE.InstancedMesh(blockGeo, materials.stone, maxBlocksPerType)
+        };
+        scene.add(instancedMeshes.grass);
+        scene.add(instancedMeshes.stone);
+
+        function updateWorldRender() {
+            let counts = { grass: 0, stone: 0 };
+            const dummy = new THREE.Object3D();
+
+            for (let key in worldData) {
+                let block = worldData[key];
+                dummy.position.set(block.x, block.y, block.z);
+                dummy.updateMatrix();
+                
+                let type = block.type;
+                let mesh = instancedMeshes[type];
+                if (mesh) {
+                    mesh.setMatrixAt(counts[type], dummy.matrix);
+                    counts[type]++;
+                }
+            }
+
+            instancedMeshes.grass.count = counts.grass;
+            instancedMeshes.stone.count = counts.stone;
+            instancedMeshes.grass.instanceMatrix.needsUpdate = true;
+            instancedMeshes.stone.instanceMatrix.needsUpdate = true;
+        }
+
+        function addBlockData(x, y, z, type) {
+            const key = `${x},${y},${z}`;
+            if (worldData[key]) return;
+            worldData[key] = { x, y, z, type };
+        }
+
+        function removeBlockData(x, y, z) {
+            const key = `${x},${y},${z}`;
+            if (worldData[key]) {
+                delete worldData[key];
+                updateWorldRender();
+            }
+        }
+
+        // 初期マップ生成
+        for (let x = -worldSize/2; x < worldSize/2; x++) {
+            for (let z = -worldSize/2; z < worldSize/2; z++) {
+                for (let y = -worldHeight; y <= 0; y++) {
+                    let type = (y === 0) ? 'grass' : 'stone';
+                    addBlockData(x, y, z, type);
+                }
+            }
+        }
+        updateWorldRender();
+
+        // --- 他のプレイヤーのアバター生成機能 ---
+        const remotePlayerGeo = new THREE.BoxGeometry(0.6, 1.8, 0.6);
+        const remotePlayerMat = new THREE.MeshLambertMaterial({ color: 0x44cc44 }); // 緑色のクラシック風スキン
+
+        function createRemotePlayerMesh() {
+            const group = new THREE.Group();
+            const body = new THREE.Mesh(remotePlayerGeo, remotePlayerMat);
+            body.position.y = 0.9; // 中心点を足元にする
+            group.add(body);
+            return group;
+        }
+
+        // Firebaseから他プレイヤーの位置を同期
+        onValue(ref(db, "players"), (snapshot) => {
+            const playersData = snapshot.val() || {};
+            
+            // 退出したプレイヤーの削除
+            for (let id in otherPlayers) {
+                if (!playersData[id]) {
+                    scene.remove(otherPlayers[id]);
+                    delete otherPlayers[id];
+                }
+            }
+
+            // 追加・更新
+            for (let id in playersData) {
+                if (id === playerId) continue; // 自分はスキップ
+
+                const p = playersData[id];
+                if (!otherPlayers[id]) {
+                    otherPlayers[id] = createRemotePlayerMesh();
+                    scene.add(otherPlayers[id]);
+                }
+
+                // 位置と回転の同期
+                otherPlayers[id].position.set(p.x, p.y, p.z);
+                otherPlayers[id].rotation.y = p.yaw;
+            }
+        });
+
+        // --- プレイヤー物理・カメラ制御 ---
+        camera.rotation.order = "YXZ";
+        let yaw = 0, pitch = 0;
+
+        const player = {
+            position: new THREE.Vector3(0, 4, 5),
+            velocity: new THREE.Vector3(0, 0, 0),
+            width: 0.6,
+            height: 1.8,
+            eyeHeight: 1.6,
+            onGround: false
+        };
+
+        camera.position.copy(player.position).y += player.eyeHeight;
+
+        document.body.addEventListener('click', () => {
+            document.body.requestPointerLock();
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (document.pointerLockElement === document.body) {
+                yaw -= e.movementX * 0.002;
+                pitch -= e.movementY * 0.002;
+                pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, pitch));
+                camera.rotation.x = pitch;
+                camera.rotation.y = yaw;
+            }
+        });
+
+        // キー入力状態
+        let keys = { KeyW: false, KeyA: false, KeyS: false, KeyD: false, Space: false, ShiftLeft: false };
+        let currentSelectedBlock = 'grass';
+
+        window.addEventListener('keydown', (e) => {
+            if (e.code in keys) keys[e.code] = true;
+            if (e.code === 'Space') keys.Space = true;
+            if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') keys.ShiftLeft = true;
+
+            if (e.code === 'Digit1') currentSelectedBlock = 'grass';
+            if (e.code === 'Digit2') currentSelectedBlock = 'stone'; // 石ブロック切り替え復活
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (e.code in keys) keys[e.code] = false;
+            if (e.code === 'Space') keys.Space = false;
+            if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') keys.ShiftLeft = false;
+        });
+
+        // --- 改良版 AABB 衝突判定 ---
+        function checkCollision(pos) {
+            const margin = 0.001;
+            const minX = pos.x - player.width / 2 + margin;
+            const maxX = pos.x + player.width / 2 - margin;
+            const minY = pos.y + margin;
+            const maxY = pos.y + player.height - margin;
+            const minZ = pos.z - player.width / 2 + margin;
+            const maxZ = pos.z + player.width / 2 - margin;
+
+            const startX = Math.floor(minX);
+            const endX = Math.floor(maxX);
+            const startY = Math.floor(minY);
+            const endY = Math.floor(maxY);
+            const startZ = Math.floor(minZ);
+            const endZ = Math.floor(maxZ);
+
+            for (let x = startX; x <= endX; x++) {
+                for (let y = startY; y <= endY; y++) {
+                    for (let z = startZ; z <= endZ; z++) {
+                        if (worldData[`${x},${y},${z}`]) {
+                            return true; 
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // --- ブロックの破壊と設置 ---
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2(0, 0);
+
+        window.addEventListener('mousedown', (e) => {
+            if (document.pointerLockElement !== document.body) return;
+
+            raycaster.setFromCamera(mouse, camera);
+            
+            let targets = [];
+            const raycastTargetGeo = new THREE.BoxGeometry(1,1,1);
+            const raycastTargetMat = new THREE.MeshBasicMaterial({ visible: false });
+            
+            for(let key in worldData) {
+                let b = worldData[key];
+                let m = new THREE.Mesh(raycastTargetGeo, raycastTargetMat);
+                m.position.set(b.x, b.y, b.z);
+                m.updateMatrixWorld();
+                m.userData = { x: b.x, y: b.y, z: b.z };
+                targets.push(m);
+            }
+
+            const intersects = raycaster.intersectObjects(targets);
+
+            if (intersects.length > 0 && intersects[0].distance < 6) {
+                const hit = intersects[0];
+                const bp = hit.object.userData;
+
+                if (e.button === 0) { 
+                    removeBlockData(bp.x, bp.y, bp.z);
+                } else if (e.button === 2) { 
+                    const normal = hit.face.normal.clone();
+                    const nx = Math.round(bp.x + normal.x);
+                    const ny = Math.round(bp.y + normal.y);
+                    const nz = Math.round(bp.z + normal.z);
+                    
+                    const pMinX = Math.floor(player.position.x - player.width/2);
+                    const pMaxX = Math.floor(player.position.x + player.width/2);
+                    const pMinY = Math.floor(player.position.y);
+                    const pMaxY = Math.floor(player.position.y + player.height);
+                    const pMinZ = Math.floor(player.position.z - player.width/2);
+                    const pMaxZ = Math.floor(player.position.z + player.width/2);
+
+                    if (!(nx >= pMinX && nx <= pMaxX && ny >= pMinY && ny <= pMaxY && nz >= pMinZ && nz <= pMaxZ)) {
+                        addBlockData(nx, ny, nz, currentSelectedBlock);
+                        updateWorldRender();
+                    }
+                }
+            }
+            targets.forEach(t => t.geometry.dispose());
+        });
+
+        window.addEventListener('contextmenu', e => e.preventDefault());
+
+        // --- メインループ ---
+        const clock = new THREE.Clock();
+        const GRAVITY = 22.0;   
+        const JUMP_FORCE = 7.5; 
+
+        // ネットワーク通信の間引き（1秒間に30回送信）
+        let networkTimer = 0;
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const delta = Math.min(clock.getDelta(), 0.1); 
+
+            if (document.pointerLockElement === document.body) {
+                let currentSpeed = keys.ShiftLeft ? 6.0 : 4.0;
+
+                const front = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw).normalize();
+                const side = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw).normalize();
+
+                let moveVec = new THREE.Vector3();
+                if (keys.KeyW) moveVec.add(front);
+                if (keys.KeyS) moveVec.sub(front);
+                if (keys.KeyD) moveVec.add(side);
+                if (keys.KeyA) moveVec.sub(side); 
+
+                if (keys.KeyW || keys.KeyA || keys.KeyS || keys.KeyD) {
+                    moveVec.normalize().multiplyScalar(currentSpeed);
+                    player.velocity.x = moveVec.x;
+                    player.velocity.z = moveVec.z;
+                } else {
+                    player.velocity.x *= 0.2; // 慣性を抑えて操作性をキビキビに
+                    player.velocity.z *= 0.2;
+                }
+
+                // 重力計算
+                player.velocity.y -= GRAVITY * delta;
+
+                // ジャンプ判定
+                if (keys.Space && player.onGround) {
+                    player.velocity.y = JUMP_FORCE;
+                    player.onGround = false;
+                }
+
+                // --- 厳密なすり抜け防止軸別移動 ---
+                // X軸の移動と衝突判定
+                let nextPos = player.position.clone();
+                nextPos.x += player.velocity.x * delta;
+                if (!checkCollision(nextPos)) {
+                    player.position.x = nextPos.x;
+                } else {
+                    player.velocity.x = 0;
+                }
+
+                // Z軸の移動と衝突判定
+                nextPos = player.position.clone();
+                nextPos.z += player.velocity.z * delta;
+                if (!checkCollision(nextPos)) {
+                    player.position.z = nextPos.z;
+                } else {
+                    player.velocity.z = 0;
+                }
+
+                // Y軸の移動と衝突判定
+                player.onGround = false;
+                nextPos = player.position.clone();
+                nextPos.y += player.velocity.y * delta;
+                
+                if (!checkCollision(nextPos)) {
+                    player.position.y = nextPos.y;
+                } else {
+                    if (player.velocity.y < 0) {
+                        player.onGround = true;
+                        // 着地時に少しだけ浮かせる遊びをなくし、正確にブロックの上に乗せる
+                        player.position.y = Math.round(player.position.y * 100) / 100;
+                    }
+                    player.velocity.y = 0;
+                }
+
+                // 奈落リスポーン
+                if (player.position.y < -30) {
+                    player.position.set(0, 4, 5);
+                    player.velocity.set(0, 0, 0);
+                }
+
+                // カメラ位置の同期
+                camera.position.copy(player.position);
+                camera.position.y += player.eyeHeight;
+
+                // --- Firebaseへ座標を同期（30FPS制限） ---
+                networkTimer += delta;
+                if (networkTimer > 0.033) {
+                    updatePlayerNetwork(player.position.x, player.position.y, player.position.z, yaw);
+                    networkTimer = 0;
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>
