@@ -131,6 +131,17 @@ BASE_COLOR[LEAVES]= [0.20,0.45,0.18];
 BASE_COLOR[SNOW]  = [0.92,0.94,0.96];
 BASE_COLOR[WATER] = [0.20,0.42,0.62];
 
+// ---------- Texture Loader ----------
+const textureLoader = new THREE.TextureLoader();
+const blockTexture = textureLoader.load('texture.png');
+// ドット絵のシャープさを維持するためのフィルタ設定
+blockTexture.magFilter = THREE.NearestFilter;
+blockTexture.minFilter = THREE.NearestFilter;
+
+const steveTexture = textureLoader.load('steve.png');
+steveTexture.magFilter = THREE.NearestFilter;
+steveTexture.minFilter = THREE.NearestFilter;
+
 // ---------- Firebase (Realtime Database) ----------
 const firebaseConfig = {
   apiKey: "AIzaSyAKf-iBYV_X3aJfpK2pfkBPFVoNcPC1lSU",
@@ -289,8 +300,8 @@ const FACES = [
 ];
 
 function buildMeshes() {
-  const opPos=[], opCol=[], opNorm=[];
-  const wPos=[], wCol=[], wNorm=[];
+  const opPos=[], opCol=[], opNorm=[], opUV=[];
+  const wPos=[], wCol=[], wNorm=[], wUV=[];
 
   for (let x=0;x<W;x++){
     for (let z=0;z<W;z++){
@@ -314,13 +325,24 @@ function buildMeshes() {
           const arr = isWater ? wPos : opPos;
           const carr = isWater ? wCol : opCol;
           const narr = isWater ? wNorm : opNorm;
+          const uvarr = isWater ? wUV : opUV;
 
           const c = f.corners;
           const tri = [c[0],c[1],c[2], c[0],c[2],c[3]];
+          
+          // 単純な平面マッピングUV用の設定
+          const uvs = [
+            [0,0], [0,1], [1,1],
+            [0,0], [1,1], [1,0]
+          ];
+          let uvIdx = 0;
+
           for (const corner of tri) {
             arr.push(x+corner[0], y+corner[1], z+corner[2]);
             carr.push(r,g,bl);
             narr.push(nx,ny,nz);
+            uvarr.push(uvs[uvIdx][0], uvs[uvIdx][1]);
+            uvIdx++;
           }
         }
       }
@@ -334,7 +356,8 @@ function buildMeshes() {
   opGeo.setAttribute('position', new THREE.Float32BufferAttribute(opPos,3));
   opGeo.setAttribute('color', new THREE.Float32BufferAttribute(opCol,3));
   opGeo.setAttribute('normal', new THREE.Float32BufferAttribute(opNorm,3));
-  const opMat = new THREE.MeshLambertMaterial({ vertexColors:true });
+  opGeo.setAttribute('uv', new THREE.Float32BufferAttribute(opUV,2));
+  const opMat = new THREE.MeshLambertMaterial({ vertexColors:true, map:blockTexture });
   opaqueMesh = new THREE.Mesh(opGeo, opMat);
   scene.add(opaqueMesh);
 
@@ -342,7 +365,8 @@ function buildMeshes() {
   wGeo.setAttribute('position', new THREE.Float32BufferAttribute(wPos,3));
   wGeo.setAttribute('color', new THREE.Float32BufferAttribute(wCol,3));
   wGeo.setAttribute('normal', new THREE.Float32BufferAttribute(wNorm,3));
-  const wMat = new THREE.MeshLambertMaterial({ vertexColors:true, transparent:true, opacity:0.65, side:THREE.DoubleSide });
+  wGeo.setAttribute('uv', new THREE.Float32BufferAttribute(wUV,2));
+  const wMat = new THREE.MeshLambertMaterial({ vertexColors:true, map:blockTexture, transparent:true, opacity:0.65, side:THREE.DoubleSide });
   waterMesh = new THREE.Mesh(wGeo, wMat);
   scene.add(waterMesh);
 }
@@ -401,7 +425,6 @@ function collidesAt(px,py,pz){
 }
 
 function updatePlayer(dt){
-  // 修正: forward はカメラが実際に向いている方向(-sin(yaw), 0, -cos(yaw)) に合わせる
   const forward = new THREE.Vector3(-Math.sin(player.yaw),0,-Math.cos(player.yaw));
   const right = new THREE.Vector3(Math.sin(player.yaw+Math.PI/2),0,Math.cos(player.yaw+Math.PI/2));
   let moveX=0, moveZ=0;
@@ -640,13 +663,23 @@ function makeNameSprite(name){
 
 function makeAvatar(name, colorCss){
   const group = new THREE.Group();
-  const bodyMat = new THREE.MeshLambertMaterial({ color: new THREE.Color(colorCss) });
-  const body = new THREE.Mesh(new THREE.BoxGeometry(0.5,1.1,0.28), bodyMat);
-  body.position.y = 0.85;
+  
+  // マテリアルをスティーブのテクスチャに変更（識別用にカラー乗算も維持）
+  const steveMat = new THREE.MeshLambertMaterial({ 
+    map: steveTexture,
+    color: new THREE.Color(colorCss) 
+  });
+  
+  // スティーブの体（マインクラフト標準の比率: 幅0.5、高さ1.2、厚み0.25）
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1.2, 0.25), steveMat);
+  body.position.y = 0.9; // 足下から持ち上げる位置調整
   group.add(body);
-  const head = new THREE.Mesh(new THREE.BoxGeometry(0.42,0.42,0.42), bodyMat);
-  head.position.y = 1.6;
+  
+  // スティーブの頭（マインクラフト標準の比率: 正立方体 0.5×0.5×0.5）
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), steveMat);
+  head.position.y = 1.75;
   group.add(head);
+  
   group.add(makeNameSprite(name));
   return group;
 }
