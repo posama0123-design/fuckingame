@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>Voxel World Multiplayer Fix</title>
+<title>Voxel World Multiplayer</title>
 <style>
   html, body { margin:0; padding:0; overflow:hidden; background:#000; height:100%; width:100%; font-family: -apple-system, "Segoe UI", "Hiragino Kaku Gothic ProN", sans-serif; }
   canvas { display:block; }
@@ -33,6 +33,14 @@
     text-shadow:0 1px 3px rgba(0,0,0,0.8); line-height:1.6; user-select:none;
   }
 
+  #onlineList {
+    position:fixed; top:14px; right:14px; z-index:10; color:#fff; font-size:13px;
+    text-shadow:0 1px 3px rgba(0,0,0,0.8); text-align:right; user-select:none;
+  }
+  .onlineTitle { opacity:0.75; font-size:11px; margin-bottom:4px; }
+  .onlineRow { display:flex; align-items:center; justify-content:flex-end; gap:6px; margin:2px 0; }
+  .onlineDot { width:9px; height:9px; border-radius:50%; display:inline-block; flex-shrink:0; }
+
   #startScreen {
     position:fixed; inset:0; background:linear-gradient(#87ceeb,#c9e8f5);
     display:flex; align-items:center; justify-content:center; flex-direction:column;
@@ -40,8 +48,17 @@
   }
   #startScreen h1 { font-size:42px; margin:0 0 8px; letter-spacing:1px; }
   #startScreen p { font-size:15px; margin:4px 0; color:#3a4a55; }
+  #nameInput {
+    margin-top:20px; padding:12px 16px; font-size:16px; border-radius:8px; border:2px solid rgba(61,90,74,0.5);
+    width:240px; text-align:center; outline:none; background:rgba(255,255,255,0.9); color:#20303d;
+  }
+  #nameInput:focus { border-color:#3d7a3d; }
+  #nameError {
+    color:#a8321f; font-size:13px; margin-top:8px; height:16px; visibility:hidden;
+  }
+  #nameError.show { visibility:visible; }
   #startBtn {
-    margin-top:22px; padding:14px 36px; font-size:16px; border:none; border-radius:8px;
+    margin-top:10px; padding:14px 36px; font-size:16px; border:none; border-radius:8px;
     background:#3d7a3d; color:#fff; cursor:pointer; box-shadow:0 3px 0 #2a552a;
   }
   #startBtn:active { transform:translateY(2px); box-shadow:0 1px 0 #2a552a; }
@@ -62,7 +79,9 @@
 
 <div id="startScreen">
   <h1>VOXEL WORLD</h1>
-  <p>ブロックを積んで、壊して、自分だけの世界を作ろう</p>
+  <p>ブロックを積んで、壊して、みんなの世界を作ろう</p>
+  <input id="nameInput" type="text" maxlength="10" placeholder="名前を入力(10文字まで)" autocomplete="off">
+  <div id="nameError">名前を入力してください</div>
   <button id="startBtn">プレイ開始</button>
   <div id="controlsBox">
     <div><b>移動</b> W / A / S / D</div>
@@ -79,46 +98,19 @@
 <div id="crosshair"></div>
 <div id="hotbar"></div>
 <div id="hud"></div>
+<div id="onlineList"></div>
 
-<!-- Three.js を先に読み込み -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-
-<!-- 全体の処理を1つのモジュールスクリプトとして完全に統一 -->
-<script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-import { getDatabase, ref, set, onChildAdded, onChildChanged, onChildRemoved, remove } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
-
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/12.15.0/firebase-app-compat.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/12.15.0/firebase-database-compat.min.js"></script>
+<script>
 (function(){
-
-// ---------- Firebase Setup ----------
-const firebaseConfig = {
-  apiKey: "AIzaSyAKf-iBYV_X3aJfpK2pfkBPFVoNcPC1lSU",
-  authDomain: "my-ktty.firebaseapp.com",
-  databaseURL: "https://my-ktty-default-rtdb.firebaseio.com",
-  projectId: "my-ktty",
-  storageBucket: "my-ktty.firebasestorage.app",
-  messagingSenderId: "313123611276",
-  appId: "1:313123611276:web:a625bdb2844f5864c551a9",
-  measurementId: "G-W6Y6QB1MDF"
-}; [source: 1]
-
-const app = initializeApp(firebaseConfig); [source: 1]
-const db = getDatabase(app);
-const myId = "player_" + Math.random().toString(36).substr(2, 9);
-const playersRef = ref(db, 'players');
-const myPlayerRef = ref(db, `players/${myId}`);
-const worldChangesRef = ref(db, 'world_changes');
-
-// 退出時にプレイヤー情報を削除
-window.addEventListener('beforeunload', () => {
-  remove(myPlayerRef);
-});
 
 // ---------- Config ----------
 const W = 48;          // world width/depth
 const H = 34;          // world height
 const WATER_LEVEL = 12;
-const CHUNK_SEED = 12345; // 全員の初期マップを同期させるための固定シード
+const CHUNK_SEED = 20260711; // 固定シード(全員が同じ地形を見られるように)
 
 // Block types
 const AIR=0, GRASS=1, DIRT=2, STONE=3, SAND=4, WATER=5, WOOD=6, LEAVES=7, SNOW=8;
@@ -130,69 +122,51 @@ const HOTBAR_BLOCKS = [GRASS, DIRT, STONE, SAND, WOOD, LEAVES, SNOW];
 
 // base colors per block (r,g,b 0-1)
 const BASE_COLOR = {};
-BASE_COLOR[GRASS] = [0.4, 0.7, 0.3];
-BASE_COLOR[DIRT]  = [0.5, 0.35, 0.2];
-BASE_COLOR[STONE] = [0.55, 0.55, 0.55];
-BASE_COLOR[SAND]  = [0.88, 0.82, 0.6];
-BASE_COLOR[WOOD]  = [0.45, 0.3, 0.18];
-BASE_COLOR[LEAVES]= [0.25, 0.5, 0.2];
-BASE_COLOR[SNOW]  = [0.95, 0.95, 0.98];
-BASE_COLOR[WATER] = [0.2, 0.45, 0.75];
+BASE_COLOR[GRASS] = [0.35,0.62,0.28];
+BASE_COLOR[DIRT]  = [0.47,0.34,0.22];
+BASE_COLOR[STONE] = [0.52,0.52,0.54];
+BASE_COLOR[SAND]  = [0.86,0.79,0.55];
+BASE_COLOR[WOOD]  = [0.40,0.28,0.16];
+BASE_COLOR[LEAVES]= [0.20,0.45,0.18];
+BASE_COLOR[SNOW]  = [0.92,0.94,0.96];
+BASE_COLOR[WATER] = [0.20,0.42,0.62];
 
-// ---------- 高クオリティ・ドット絵風テクスチャの自動生成 ----------
-function createProceduralTexture(blockType, isSide = false) {
-  const size = 16;
-  const canvas = document.createElement('canvas');
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext('2d');
-  
-  let base = BASE_COLOR[blockType];
-  let isGrassSide = (blockType === GRASS && isSide);
+// ---------- Firebase (Realtime Database) ----------
+const firebaseConfig = {
+  apiKey: "AIzaSyAKf-iBYV_X3aJfpK2pfkBPFVoNcPC1lSU",
+  authDomain: "my-ktty.firebaseapp.com",
+  databaseURL: "https://my-ktty-default-rtdb.firebaseio.com",
+  projectId: "my-ktty",
+  storageBucket: "my-ktty.firebasestorage.app",
+  messagingSenderId: "313123611276",
+  appId: "1:313123611276:web:a625bdb2844f5864c551a9",
+  measurementId: "G-W6Y6QB1MDF"
+};
+const ROOM = "main";
+const blocksPath = "rooms/" + ROOM + "/blocks";
+const playersPath = "rooms/" + ROOM + "/players";
 
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      let r = base[0], g = base[1], b = base[2];
-      
-      if (isGrassSide) {
-        if (y < 4 + Math.sin(x * 1.5) * 1.2) {
-          r = BASE_COLOR[GRASS][0]; g = BASE_COLOR[GRASS][1]; b = BASE_COLOR[GRASS][2];
-        } else {
-          r = BASE_COLOR[DIRT][0]; g = BASE_COLOR[DIRT][1]; b = BASE_COLOR[DIRT][2];
-        }
-      }
-
-      // 明度ノイズをのせることでリアルな質感を演出
-      let noise = (Math.random() - 0.5) * 0.12;
-      if (blockType === STONE) noise += (Math.random() - 0.5) * 0.06;
-      if (blockType === SAND) noise += (Math.random() - 0.5) * 0.04;
-      
-      // ブロックのフチを少しだけ暗くして立体感を強調
-      if (x === 0 || y === 0 || x === size - 1 || y === size - 1) {
-        noise -= 0.08;
-      }
-
-      r = Math.min(1, Math.max(0, r + noise));
-      g = Math.min(1, Math.max(0, g + noise));
-      b = Math.min(1, Math.max(0, b + noise));
-
-      ctx.fillStyle = `rgb(${Math.floor(r*255)},${Math.floor(g*255)},${Math.floor(b*255)})`;
-      ctx.fillRect(x, y, 1, 1);
-    }
+let fbReady = false, db = null, playerRef = null, myId = null;
+let playerName = "", myColor = "#ffffff";
+try {
+  if (typeof firebase !== "undefined") {
+    firebase.initializeApp(firebaseConfig);
+    db = firebase.database();
+    fbReady = true;
   }
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.magFilter = THREE.NearestFilter; // ドット絵特有のクッキリ感を出す設定
-  texture.minFilter = THREE.NearestFilter;
-  return texture;
+} catch (err) {
+  console.warn("Firebase 初期化に失敗しました。1人プレイで続行します。", err);
+  fbReady = false;
 }
 
-const textures = {};
-HOTBAR_BLOCKS.concat([WATER]).forEach(b => {
-  textures[b] = createProceduralTexture(b, false);
-});
+function colorForId(id){
+  let h = 0;
+  for (let i=0;i<id.length;i++) h = (h*31 + id.charCodeAt(i)) >>> 0;
+  const hue = h % 360;
+  return "hsl(" + hue + ", 65%, 55%)";
+}
 
-// ---------- Noise ----------
+// ---------- Noise (value noise, seeded) ----------
 function hash2(x, z) {
   let n = Math.sin(x*127.1 + z*311.7 + CHUNK_SEED*0.001) * 43758.5453123;
   return n - Math.floor(n);
@@ -274,16 +248,6 @@ function generateWorld() {
 }
 const heightMap = generateWorld();
 
-// Firebaseからのブロック変更のリアルタイム受信
-let dirty = false;
-onChildAdded(worldChangesRef, (snapshot) => {
-  const data = snapshot.val();
-  if(data && data.x !== undefined) {
-    setBlock(data.x, data.y, data.z, data.v);
-    dirty = true;
-  }
-});
-
 // ---------- Three.js setup ----------
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x8ec6f0);
@@ -306,6 +270,7 @@ scene.add(new THREE.AmbientLight(0xffffff, 0.25));
 // ---------- Mesh building ----------
 let opaqueMesh = null;
 let waterMesh = null;
+let dirty = false;
 
 function faceShade(nx, ny, nz) {
   if (ny === 1) return 1.0;
@@ -324,8 +289,8 @@ const FACES = [
 ];
 
 function buildMeshes() {
-  const opPos=[], opCol=[], opNorm=[], opUV=[];
-  const wPos=[], wCol=[], wNorm=[], wUV=[];
+  const opPos=[], opCol=[], opNorm=[];
+  const wPos=[], wCol=[], wNorm=[];
 
   for (let x=0;x<W;x++){
     for (let z=0;z<W;z++){
@@ -339,26 +304,23 @@ function buildMeshes() {
           const hideFace = isWater ? (nb !== AIR) : (nb !== AIR && nb !== WATER);
           if (hideFace) continue;
 
-          let col = [1,1,1];
+          let col = BASE_COLOR[b] || [1,0,1];
+          if (b === GRASS && ny === 0) {
+            col = [0.42,0.36,0.20];
+          }
           const shade = faceShade(nx,ny,nz);
           const r=col[0]*shade, g=col[1]*shade, bl=col[2]*shade;
 
           const arr = isWater ? wPos : opPos;
           const carr = isWater ? wCol : opCol;
           const narr = isWater ? wNorm : opNorm;
-          const uvarr = isWater ? wUV : opUV;
 
           const c = f.corners;
           const tri = [c[0],c[1],c[2], c[0],c[2],c[3]];
-          const uvs = [[0,0],[0,1],[1,1], [0,0],[1,1],[1,0]];
-
-          let idxUV = 0;
           for (const corner of tri) {
             arr.push(x+corner[0], y+corner[1], z+corner[2]);
             carr.push(r,g,bl);
             narr.push(nx,ny,nz);
-            uvarr.push(uvs[idxUV][0], uvs[idxUV][1]);
-            idxUV++;
           }
         }
       }
@@ -372,12 +334,7 @@ function buildMeshes() {
   opGeo.setAttribute('position', new THREE.Float32BufferAttribute(opPos,3));
   opGeo.setAttribute('color', new THREE.Float32BufferAttribute(opCol,3));
   opGeo.setAttribute('normal', new THREE.Float32BufferAttribute(opNorm,3));
-  opGeo.setAttribute('uv', new THREE.Float32BufferAttribute(opUV,2));
-  
-  const opMat = new THREE.MeshLambertMaterial({ 
-    vertexColors: true,
-    map: textures[GRASS] 
-  });
+  const opMat = new THREE.MeshLambertMaterial({ vertexColors:true });
   opaqueMesh = new THREE.Mesh(opGeo, opMat);
   scene.add(opaqueMesh);
 
@@ -385,49 +342,11 @@ function buildMeshes() {
   wGeo.setAttribute('position', new THREE.Float32BufferAttribute(wPos,3));
   wGeo.setAttribute('color', new THREE.Float32BufferAttribute(wCol,3));
   wGeo.setAttribute('normal', new THREE.Float32BufferAttribute(wNorm,3));
-  wGeo.setAttribute('uv', new THREE.Float32BufferAttribute(wUV,2));
-  const wMat = new THREE.MeshLambertMaterial({ 
-    vertexColors:true, 
-    transparent:true, 
-    opacity:0.6, 
-    side:THREE.DoubleSide,
-    map: textures[WATER]
-  });
+  const wMat = new THREE.MeshLambertMaterial({ vertexColors:true, transparent:true, opacity:0.65, side:THREE.DoubleSide });
   waterMesh = new THREE.Mesh(wGeo, wMat);
   scene.add(waterMesh);
 }
 buildMeshes();
-
-// ---------- 他プレイヤーの同期表示 ----------
-const remotePlayers = {};
-const playerGeometry = new THREE.BoxGeometry(0.6, 1.7, 0.6);
-const playerMaterial = new THREE.MeshLambertMaterial({ color: 0xff4444 });
-
-onChildAdded(playersRef, (snapshot) => {
-  if (snapshot.key === myId) return;
-  const mesh = new THREE.Mesh(playerGeometry, playerMaterial);
-  scene.add(mesh);
-  remotePlayers[snapshot.key] = mesh;
-});
-
-onChildChanged(playersRef, (snapshot) => {
-  if (snapshot.key === myId) return;
-  const pData = snapshot.val();
-  const mesh = remotePlayers[snapshot.key];
-  if (mesh && pData) {
-    mesh.position.set(pData.x, pData.y, pData.z);
-    mesh.rotation.y = pData.yaw;
-  }
-});
-
-onChildRemoved(playersRef, (snapshot) => {
-  const mesh = remotePlayers[snapshot.key];
-  if (mesh) {
-    scene.remove(mesh);
-    mesh.geometry.dispose();
-    delete remotePlayers[snapshot.key];
-  }
-});
 
 // ---------- Player ----------
 const player = {
@@ -439,7 +358,6 @@ const player = {
   height: 1.7,
   radius: 0.3,
 };
-
 (function findSpawn(){
   const sx = Math.floor(W/2), sz = Math.floor(W/2);
   let sy = H-1;
@@ -483,10 +401,9 @@ function collidesAt(px,py,pz){
 }
 
 function updatePlayer(dt){
-  // 【完全修正】前進（W）で視線方向へ進み、後退（S）で後ろへ下がるように数式を確定
-  const forward = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
-  const right = new THREE.Vector3(-Math.cos(player.yaw), 0, Math.sin(player.yaw));
-  
+  // 修正: forward はカメラが実際に向いている方向(-sin(yaw), 0, -cos(yaw)) に合わせる
+  const forward = new THREE.Vector3(-Math.sin(player.yaw),0,-Math.cos(player.yaw));
+  const right = new THREE.Vector3(Math.sin(player.yaw+Math.PI/2),0,Math.cos(player.yaw+Math.PI/2));
   let moveX=0, moveZ=0;
   if (keys['KeyW']) { moveX+=forward.x; moveZ+=forward.z; }
   if (keys['KeyS']) { moveX-=forward.x; moveZ-=forward.z; }
@@ -528,45 +445,45 @@ function updatePlayer(dt){
   camera.rotation.order = 'YXZ';
   camera.rotation.y = player.yaw;
   camera.rotation.x = player.pitch;
-
-  // 自分の位置情報をFirebaseへ随時送信
-  set(myPlayerRef, {
-    x: player.pos.x,
-    y: player.pos.y,
-    z: player.pos.z,
-    yaw: player.yaw
-  });
 }
 
-// ---------- ポインターロックとスタート処理の確実なバインド ----------
+// ---------- Name entry, pointer lock + mouse look ----------
 const canvas = renderer.domElement;
 const startScreen = document.getElementById('startScreen');
 const pausedEl = document.getElementById('paused');
 const startBtn = document.getElementById('startBtn');
+const nameInput = document.getElementById('nameInput');
+const nameError = document.getElementById('nameError');
+
+nameInput.addEventListener('keydown', e=>{
+  if (e.key === 'Enter') startBtn.click();
+});
+
 let gameStarted = false;
 
-// ボタンクリックイベントの確実な設定
-startBtn.onclick = function() {
-  canvas.requestPointerLock();
-};
-
-canvas.onclick = function() {
-  if (gameStarted && !document.pointerLockElement) {
-    canvas.requestPointerLock();
+startBtn.addEventListener('click', ()=>{
+  const name = nameInput.value.trim().slice(0,10);
+  if (!name) {
+    nameError.classList.add('show');
+    nameInput.focus();
+    return;
   }
-};
-
+  nameError.classList.remove('show');
+  playerName = name;
+  myId = 'p_' + Math.random().toString(36).slice(2,10) + Date.now().toString(36);
+  myColor = colorForId(myId);
+  updateOnlineListUI({});
+  joinMultiplayer();
+  canvas.requestPointerLock();
+});
+canvas.addEventListener('click', ()=>{
+  if (!document.pointerLockElement && gameStarted) canvas.requestPointerLock();
+});
 document.addEventListener('pointerlockchange', ()=>{
   const locked = document.pointerLockElement === canvas;
-  if (locked) {
-    gameStarted = true;
-    startScreen.style.display = 'none';
-    pausedEl.style.display = 'none';
-  } else {
-    if (gameStarted) {
-      pausedEl.style.display = 'flex';
-    }
-  }
+  if (locked) { gameStarted = true; }
+  startScreen.style.display = locked ? 'none' : (gameStarted ? 'none' : 'flex');
+  pausedEl.style.display = (!locked && gameStarted) ? 'flex' : 'none';
 });
 
 document.addEventListener('mousemove', e=>{
@@ -616,23 +533,6 @@ function raycastVoxel(maxDist){
   return null;
 }
 
-canvas.addEventListener('mousedown', e=>{
-  if (document.pointerLockElement !== canvas) return;
-  const hit = raycastVoxel(7);
-  if (!hit) return;
-  
-  if (e.button === 0) {
-    const blockKey = `${hit.x}_${hit.y}_${hit.z}`;
-    set(ref(db, `world_changes/${blockKey}`), { x: hit.x, y: hit.y, z: hit.z, v: AIR });
-  } else if (e.button === 2) {
-    const px = hit.x+hit.normal[0], py = hit.y+hit.normal[1], pz = hit.z+hit.normal[2];
-    if (!collidesAtBlockPlace(px,py,pz)) {
-      const blockKey = `${px}_${py}_${pz}`;
-      set(ref(db, `world_changes/${blockKey}`), { x: px, y: py, z: pz, v: HOTBAR_BLOCKS[selected] });
-    }
-  }
-});
-
 function collidesAtBlockPlace(bx,by,bz){
   const r = player.radius;
   const minX = Math.floor(player.pos.x-r), maxX = Math.floor(player.pos.x+r);
@@ -640,7 +540,185 @@ function collidesAtBlockPlace(bx,by,bz){
   const minY = Math.floor(player.pos.y), maxY = Math.floor(player.pos.y+player.height);
   return bx>=minX && bx<=maxX && by>=minY && by<=maxY && bz>=minZ && bz<=maxZ;
 }
+
+canvas.addEventListener('mousedown', e=>{
+  if (document.pointerLockElement !== canvas) return;
+  const hit = raycastVoxel(7);
+  if (!hit) return;
+  if (e.button === 0) {
+    setBlock(hit.x, hit.y, hit.z, AIR);
+    dirty = true;
+    pushBlockEdit(hit.x, hit.y, hit.z, AIR);
+  } else if (e.button === 2) {
+    const px = hit.x+hit.normal[0], py = hit.y+hit.normal[1], pz = hit.z+hit.normal[2];
+    if (!collidesAtBlockPlace(px,py,pz)) {
+      const block = HOTBAR_BLOCKS[selected];
+      setBlock(px,py,pz, block);
+      dirty = true;
+      pushBlockEdit(px,py,pz, block);
+    }
+  }
+});
 canvas.addEventListener('contextmenu', e=> e.preventDefault());
+
+// ---------- Multiplayer (Firebase Realtime Database) ----------
+function pushBlockEdit(x,y,z,val){
+  if (!fbReady || !db) return;
+  try { db.ref(blocksPath + '/' + x + '_' + y + '_' + z).set(val); }
+  catch(e) { console.warn('block sync failed', e); }
+}
+
+function onBlockEdit(snap){
+  const key = snap.key;
+  const parts = key.split('_').map(Number);
+  if (parts.length !== 3) return;
+  setBlock(parts[0], parts[1], parts[2], snap.val());
+  dirty = true;
+}
+
+function joinMultiplayer(){
+  if (!fbReady || !db) {
+    document.getElementById('onlineList').innerHTML = '<div class="onlineTitle">オフライン(1人プレイ)</div>';
+    return;
+  }
+  try {
+    playerRef = db.ref(playersPath + '/' + myId);
+    playerRef.onDisconnect().remove();
+    playerRef.set({
+      name: playerName,
+      color: myColor,
+      x: player.pos.x, y: player.pos.y, z: player.pos.z,
+      yaw: player.yaw, pitch: player.pitch,
+      ts: Date.now()
+    });
+
+    db.ref(playersPath).on('value', snap=>{
+      updateRemotePlayers(snap.val() || {});
+    });
+
+    db.ref(blocksPath).once('value').then(snap=>{
+      const val = snap.val() || {};
+      for (const key in val) {
+        const parts = key.split('_').map(Number);
+        if (parts.length === 3) setBlock(parts[0], parts[1], parts[2], val[key]);
+      }
+      dirty = true;
+      db.ref(blocksPath).on('child_added', onBlockEdit);
+      db.ref(blocksPath).on('child_changed', onBlockEdit);
+    }).catch(e=> console.warn('block load failed', e));
+  } catch(e) {
+    console.warn('multiplayer join failed', e);
+    document.getElementById('onlineList').innerHTML = '<div class="onlineTitle">オフライン(1人プレイ)</div>';
+  }
+}
+
+window.addEventListener('beforeunload', ()=>{
+  if (playerRef) { try { playerRef.remove(); } catch(e){} }
+});
+
+// ---------- Remote player avatars ----------
+const remotePlayers = {}; // id -> { group, target:{x,y,z,yaw} }
+
+function makeNameSprite(name){
+  const cnv = document.createElement('canvas');
+  cnv.width = 256; cnv.height = 64;
+  const ctx = cnv.getContext('2d');
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillRect(0,0,256,64);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 30px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(name).slice(0,14), 128, 32);
+  const tex = new THREE.CanvasTexture(cnv);
+  const mat = new THREE.SpriteMaterial({ map:tex, depthTest:false });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(1.6,0.4,1);
+  sprite.position.set(0, 2.05, 0);
+  return sprite;
+}
+
+function makeAvatar(name, colorCss){
+  const group = new THREE.Group();
+  const bodyMat = new THREE.MeshLambertMaterial({ color: new THREE.Color(colorCss) });
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.5,1.1,0.28), bodyMat);
+  body.position.y = 0.85;
+  group.add(body);
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.42,0.42,0.42), bodyMat);
+  head.position.y = 1.6;
+  group.add(head);
+  group.add(makeNameSprite(name));
+  return group;
+}
+
+function updateRemotePlayers(playersVal){
+  const seen = new Set();
+  for (const id in playersVal) {
+    if (id === myId) continue;
+    const p = playersVal[id];
+    if (!p) continue;
+    seen.add(id);
+    let rp = remotePlayers[id];
+    const color = (p.color && typeof p.color === 'string') ? p.color : colorForId(id);
+    if (!rp) {
+      const group = makeAvatar(p.name || '???', color);
+      scene.add(group);
+      rp = remotePlayers[id] = { group, target: {x:p.x||0,y:p.y||0,z:p.z||0,yaw:p.yaw||0} };
+      group.position.set(rp.target.x, rp.target.y, rp.target.z);
+      group.rotation.y = rp.target.yaw;
+    }
+    rp.target.x = p.x||0; rp.target.y = p.y||0; rp.target.z = p.z||0; rp.target.yaw = p.yaw||0;
+  }
+  for (const id in remotePlayers) {
+    if (!seen.has(id)) {
+      scene.remove(remotePlayers[id].group);
+      delete remotePlayers[id];
+    }
+  }
+  updateOnlineListUI(playersVal);
+}
+
+function tickRemotePlayers(dt){
+  const t = Math.min(1, dt*10);
+  for (const id in remotePlayers) {
+    const rp = remotePlayers[id];
+    const g = rp.group, tg = rp.target;
+    g.position.x += (tg.x - g.position.x) * t;
+    g.position.y += (tg.y - g.position.y) * t;
+    g.position.z += (tg.z - g.position.z) * t;
+    let dy = tg.yaw - g.rotation.y;
+    while (dy > Math.PI) dy -= Math.PI*2;
+    while (dy < -Math.PI) dy += Math.PI*2;
+    g.rotation.y += dy * t;
+  }
+}
+
+function updateOnlineListUI(playersVal){
+  const el = document.getElementById('onlineList');
+  el.innerHTML = '';
+  const title = document.createElement('div');
+  title.className = 'onlineTitle';
+  title.textContent = 'オンライン';
+  el.appendChild(title);
+  function addRow(name, color){
+    const row = document.createElement('div');
+    row.className = 'onlineRow';
+    const dot = document.createElement('span');
+    dot.className = 'onlineDot';
+    dot.style.background = color;
+    const label = document.createElement('span');
+    label.textContent = String(name).slice(0,14);
+    row.appendChild(label);
+    row.appendChild(dot);
+    el.appendChild(row);
+  }
+  addRow(playerName + ' (自分)', myColor);
+  for (const id in playersVal) {
+    if (id === myId) continue;
+    const p = playersVal[id];
+    if (p) addRow(p.name || '???', p.color || colorForId(id));
+  }
+}
 
 // ---------- Hotbar UI ----------
 const hotbarEl = document.getElementById('hotbar');
@@ -666,7 +744,6 @@ function updateHud(fps){
   hudEl.innerHTML =
     `座標: X ${player.pos.x.toFixed(1)}  Y ${player.pos.y.toFixed(1)}  Z ${player.pos.z.toFixed(1)}<br>` +
     `選択中: ${BLOCK_NAMES[HOTBAR_BLOCKS[selected]]}<br>` +
-    `他プレイヤー数: ${Object.keys(remotePlayers).length}<br>` +
     `FPS: ${fps}`;
 }
 
@@ -680,6 +757,7 @@ window.addEventListener('resize', ()=>{
 // ---------- Main loop ----------
 let lastTime = performance.now();
 let frameCount = 0, fpsTimer = 0, fps = 0;
+let lastNetSend = 0;
 
 function animate(now){
   requestAnimationFrame(animate);
@@ -688,7 +766,15 @@ function animate(now){
 
   if (document.pointerLockElement === canvas) {
     updatePlayer(dt);
+    if (fbReady && playerRef && now - lastNetSend > 100) {
+      lastNetSend = now;
+      playerRef.update({
+        x: player.pos.x, y: player.pos.y, z: player.pos.z,
+        yaw: player.yaw, pitch: player.pitch, ts: Date.now()
+      }).catch(()=>{});
+    }
   }
+  tickRemotePlayers(dt);
   if (dirty) { buildMeshes(); dirty = false; }
 
   frameCount++; fpsTimer += dt;
