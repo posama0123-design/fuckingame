@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>Voxel World Multiplayer</title>
+<title>Voxel World Multiplayer with Clouds</title>
 <style>
   html, body { margin:0; padding:0; overflow:hidden; background:#000; height:100%; width:100%; font-family: -apple-system, "Segoe UI", "Hiragino Kaku Gothic ProN", sans-serif; }
   canvas { display:block; }
@@ -114,7 +114,6 @@ const CHUNK_SEED = 20260711; // 固定シード
 
 // Block types
 const AIR=0, GRASS=1, DIRT=2, STONE=3, SAND=4, WATER=5, WOOD=6, LEAVES=7, SNOW=8;
-// 内部処理用に「草の上面」という仮想のブロックIDを1つ定義します
 const GRASS_TOP = 99; 
 
 const BLOCK_NAMES = {};
@@ -126,7 +125,7 @@ const HOTBAR_BLOCKS = [GRASS, DIRT, STONE, SAND, WOOD, LEAVES, SNOW];
 // base colors per block (r,g,b 0-1)
 const BASE_COLOR = {};
 BASE_COLOR[GRASS] = [0.35,0.62,0.28];
-BASE_COLOR[GRASS_TOP] = [0.35,0.62,0.28]; // 上面の色
+BASE_COLOR[GRASS_TOP] = [0.35,0.62,0.28];
 BASE_COLOR[DIRT]  = [0.47,0.34,0.22];
 BASE_COLOR[STONE] = [0.52,0.52,0.54];
 BASE_COLOR[SAND]  = [0.86,0.79,0.55];
@@ -145,10 +144,9 @@ function createBlockMaterial(url) {
   return new THREE.MeshLambertMaterial({ vertexColors: true, map: tex });
 }
 
-// ★マテリアル定義。GRASSは「側面」用、GRASS_TOPを「上面」用として読み込みます
 const opMaterialsMap = {};
-opMaterialsMap[GRASS]     = createBlockMaterial('grass.png');     // 側面・底面用画像
-opMaterialsMap[GRASS_TOP] = createBlockMaterial('grass_top.png'); // 上面用画像
+opMaterialsMap[GRASS]     = createBlockMaterial('grass.png');
+opMaterialsMap[GRASS_TOP] = createBlockMaterial('grass_top.png');
 opMaterialsMap[DIRT]      = createBlockMaterial('dirt.png');
 opMaterialsMap[STONE]     = createBlockMaterial('stone.png');
 opMaterialsMap[SAND]      = createBlockMaterial('sand.png');
@@ -156,7 +154,6 @@ opMaterialsMap[WOOD]      = createBlockMaterial('wood.png');
 opMaterialsMap[LEAVES]    = createBlockMaterial('leaves.png');
 opMaterialsMap[SNOW]      = createBlockMaterial('snow.png');
 
-// 描画エンジンが処理する全不透明テクスチャの登録リスト
 const OPAQUE_RENDER_TYPES = [GRASS, GRASS_TOP, DIRT, STONE, SAND, WOOD, LEAVES, SNOW];
 const opMaterialsArray = OPAQUE_RENDER_TYPES.map(type => opMaterialsMap[type]);
 const opMaterialIndexMap = {};
@@ -164,7 +161,6 @@ OPAQUE_RENDER_TYPES.forEach((type, index) => {
   opMaterialIndexMap[type] = index;
 });
 
-// 水専用のマテリアル
 const waterTexture = textureLoader.load('water.png');
 waterTexture.magFilter = THREE.NearestFilter;
 waterTexture.minFilter = THREE.NearestFilter;
@@ -316,6 +312,32 @@ sun.position.set(60, 90, 40);
 scene.add(sun);
 scene.add(new THREE.AmbientLight(0xffffff, 0.25));
 
+// ---------- 雲 (Clouds) の追加（バグ修正版） ----------
+const cloudTexture = textureLoader.load('clouds.png');
+cloudTexture.wrapS = THREE.RepeatWrapping;
+cloudTexture.wrapT = THREE.RepeatWrapping;
+cloudTexture.magFilter = THREE.NearestFilter;
+cloudTexture.minFilter = THREE.NearestFilter;
+cloudTexture.repeat.set(12, 12); 
+
+// テクスチャ競合バグを防ぐため、ブレンドモードをNormalBlending＋alphaTestに調整
+const cloudMat = new THREE.MeshBasicMaterial({
+  map: cloudTexture,
+  transparent: true,
+  blending: THREE.NormalBlending,
+  alphaTest: 0.1,
+  opacity: 0.8,
+  depthWrite: false,
+  side: THREE.DoubleSide
+});
+
+const cloudGeo = new THREE.PlaneGeometry(1000, 1000);
+const cloudMesh = new THREE.Mesh(cloudGeo, cloudMat);
+cloudMesh.rotation.x = -Math.PI / 2;
+cloudMesh.position.set(W / 2, 55, W / 2); 
+scene.add(cloudMesh);
+
+
 // ---------- Mesh building ----------
 let opaqueMesh = null;
 let waterMesh = null;
@@ -357,16 +379,14 @@ function buildMeshes() {
           const hideFace = isWater ? (nb !== AIR) : (nb !== AIR && nb !== WATER);
           if (hideFace) continue;
 
-          // ★面ごとのマテリアル判定
           let renderType = b;
           if (b === GRASS) {
             if (ny === 1) {
-              renderType = GRASS_TOP; // 真上の面なら草の上面テクスチャを適用
+              renderType = GRASS_TOP;
             }
           }
 
           let col = BASE_COLOR[renderType] || [1,0,1];
-          // 草ブロックの側面(ny === 0)のカラー補正を外す（テクスチャ画像側の土の色をそのまま出すため）
           if (b === GRASS && ny === 0) {
             col = [1.0, 1.0, 1.0]; 
           }
@@ -869,6 +889,12 @@ function animate(now){
   requestAnimationFrame(animate);
   const dt = Math.min((now - lastTime)/1000, 0.05);
   lastTime = now;
+
+  // 雲のアニメーション (ゆっくり斜めに流す)
+  if (cloudTexture) {
+    cloudTexture.offset.x += 0.003 * dt;
+    cloudTexture.offset.y += 0.001 * dt;
+  }
 
   if (document.pointerLockElement === canvas) {
     updatePlayer(dt);
