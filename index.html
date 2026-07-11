@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>Voxel World Multiplayer with Clouds</title>
+<title>Voxel World Multiplayer with Time & Torches</title>
 <style>
   html, body { margin:0; padding:0; overflow:hidden; background:#000; height:100%; width:100%; font-family: -apple-system, "Segoe UI", "Hiragino Kaku Gothic ProN", sans-serif; }
   canvas { display:block; }
@@ -79,7 +79,7 @@
 
 <div id="startScreen">
   <h1>VOXEL WORLD</h1>
-  <p>ブロックを積んで、壊して、みんなの世界を作ろう</p>
+  <p>時間経過システム & 松明アップデート</p>
   <input id="nameInput" type="text" maxlength="10" placeholder="名前を入力(10文字まで)" autocomplete="off">
   <div id="nameError">名前を入力してください</div>
   <button id="startBtn">プレイ開始</button>
@@ -89,7 +89,7 @@
     <div><b>ジャンプ</b> スペースキー</div>
     <div><b>ブロックを壊す</b> 左クリック</div>
     <div><b>ブロックを置く</b> 右クリック</div>
-    <div><b>ブロック選択</b> 数字キー 1〜7 / ホイール</div>
+    <div><b>ブロック選択</b> 数字キー 1〜8 / ホイール</div>
   </div>
 </div>
 
@@ -110,19 +110,20 @@
 const W = 48;          // world width/depth
 const H = 34;          // world height
 const WATER_LEVEL = 12;
-const CHUNK_SEED = 20260711; // 固定シード
+const CHUNK_SEED = 20260711;
 
 // Block types
-const AIR=0, GRASS=1, DIRT=2, STONE=3, SAND=4, WATER=5, WOOD=6, LEAVES=7, SNOW=8;
+const AIR=0, GRASS=1, DIRT=2, STONE=3, SAND=4, WATER=5, WOOD=6, LEAVES=7, SNOW=8, TORCH=9;
 const GRASS_TOP = 99; 
 
 const BLOCK_NAMES = {};
 BLOCK_NAMES[GRASS]="草"; BLOCK_NAMES[DIRT]="土"; BLOCK_NAMES[STONE]="石";
-BLOCK_NAMES[SAND]="砂"; BLOCK_NAMES[WOOD]="木材"; BLOCK_NAMES[LEAVES]="葉"; BLOCK_NAMES[SNOW]="雪";
+BLOCK_NAMES[SAND]="砂"; BLOCK_NAMES[WOOD]="木材"; BLOCK_NAMES[LEAVES]="葉"; 
+BLOCK_NAMES[SNOW]="雪"; BLOCK_NAMES[TORCH]="松明";
 
-const HOTBAR_BLOCKS = [GRASS, DIRT, STONE, SAND, WOOD, LEAVES, SNOW];
+const HOTBAR_BLOCKS = [GRASS, DIRT, STONE, SAND, WOOD, LEAVES, SNOW, TORCH];
 
-// base colors per block (r,g,b 0-1)
+// Base colors
 const BASE_COLOR = {};
 BASE_COLOR[GRASS] = [0.35,0.62,0.28];
 BASE_COLOR[GRASS_TOP] = [0.35,0.62,0.28];
@@ -133,6 +134,51 @@ BASE_COLOR[WOOD]  = [0.40,0.28,0.16];
 BASE_COLOR[LEAVES]= [0.20,0.45,0.18];
 BASE_COLOR[SNOW]  = [0.92,0.94,0.96];
 BASE_COLOR[WATER] = [0.20,0.42,0.62];
+BASE_COLOR[TORCH] = [0.25,0.18,0.12]; // 手持ちスロット表示用
+
+// ---------- Time System Variables ----------
+let gameTime = 8.0; // 朝の8時からスタート
+const TIME_SPEED = 0.4; // 数値が大きいほど時間の進みが早くなります
+
+// ---------- Generated Torch Texture (松明の内蔵化) ----------
+function generateTorchTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 16;
+  canvas.height = 16;
+  const ctx = canvas.getContext('2d');
+  
+  // 背景は透明
+  ctx.clearRect(0, 0, 16, 16);
+  
+  // 持ち手（茶色の木の棒）
+  ctx.fillStyle = '#5c4033';
+  ctx.fillRect(7, 6, 2, 10);
+  ctx.fillStyle = '#3d2b22';
+  ctx.fillRect(7, 10, 1, 6);
+  
+  // 持ち手の頭パーツ（黒・炭化部分）
+  ctx.fillStyle = '#222222';
+  ctx.fillRect(6, 4, 4, 2);
+  
+  // 炎の中心（黄色・白）
+  ctx.fillStyle = '#ffffa0';
+  ctx.fillRect(7, 1, 2, 3);
+  
+  // 炎の外周（オレンジ・赤）
+  ctx.fillStyle = '#ff6600';
+  ctx.fillRect(6, 2, 1, 2);
+  ctx.fillRect(9, 2, 1, 2);
+  ctx.fillRect(7, 0, 2, 1);
+  ctx.fillStyle = '#ff3300';
+  ctx.fillRect(6, 3, 1, 1);
+  ctx.fillRect(9, 3, 1, 1);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.magFilter = THREE.NearestFilter;
+  texture.minFilter = THREE.NearestFilter;
+  return texture;
+}
+const torchTexture = generateTorchTexture();
 
 // ---------- Texture Loader & Materials Setup ----------
 const textureLoader = new THREE.TextureLoader();
@@ -154,7 +200,16 @@ opMaterialsMap[WOOD]      = createBlockMaterial('wood.png');
 opMaterialsMap[LEAVES]    = createBlockMaterial('leaves.png');
 opMaterialsMap[SNOW]      = createBlockMaterial('snow.png');
 
-const OPAQUE_RENDER_TYPES = [GRASS, GRASS_TOP, DIRT, STONE, SAND, WOOD, LEAVES, SNOW];
+// 松明用マテリアル（炎の部分が暗闇で沈まないように、少し自己発光(emissive)を入れます）
+opMaterialsMap[TORCH]     = new THREE.MeshLambertMaterial({ 
+  vertexColors: true, 
+  map: torchTexture, 
+  transparent: true, 
+  alphaTest: 0.1,
+  emissive: new THREE.Color(0x553311)
+});
+
+const OPAQUE_RENDER_TYPES = [GRASS, GRASS_TOP, DIRT, STONE, SAND, WOOD, LEAVES, SNOW, TORCH];
 const opMaterialsArray = OPAQUE_RENDER_TYPES.map(type => opMaterialsMap[type]);
 const opMaterialIndexMap = {};
 OPAQUE_RENDER_TYPES.forEach((type, index) => {
@@ -295,8 +350,10 @@ const heightMap = generateWorld();
 
 // ---------- Three.js setup ----------
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x8ec6f0);
-scene.fog = new THREE.Fog(0x8ec6f0, 60, 170);
+
+// 霧の初期化（動的に色を変えるので、あとでループ内で更新します）
+const globalFog = new THREE.Fog(0x8ec6f0, 50, 140);
+scene.fog = globalFog;
 
 const camera = new THREE.PerspectiveCamera(72, window.innerWidth/window.innerHeight, 0.1, 500);
 
@@ -305,14 +362,42 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
 document.body.appendChild(renderer.domElement);
 
-const hemi = new THREE.HemisphereLight(0xbfe0ff, 0x3a3a2a, 0.9);
+// ライティング
+const hemi = new THREE.HemisphereLight(0xffffff, 0xffffff, 0.6);
 scene.add(hemi);
-const sun = new THREE.DirectionalLight(0xffffff, 0.85);
+const sun = new THREE.DirectionalLight(0xffffff, 0.7);
 sun.position.set(60, 90, 40);
 scene.add(sun);
-scene.add(new THREE.AmbientLight(0xffffff, 0.25));
 
-// ---------- 雲 (Clouds) の追加（バグ修正版） ----------
+// 夜間用のプレイヤー周囲を照らすライト（手持ちの灯り・および松明配置時の動的ライト用プール）
+const playerLight = new THREE.PointLight(0xffaa44, 0.0, 12);
+scene.add(playerLight);
+
+// 配置された松明のライトを管理する配列
+const torchLights = [];
+function updateTorchLightsInScene() {
+  // 一度古い松明ライトを全部削除
+  torchLights.forEach(l => scene.remove(l));
+  torchLights.length = 0;
+
+  // ワールド内の松明ブロックを探してライトを配置（重くならないように上限を設ける）
+  let count = 0;
+  for (let x=0; x<W; x++) {
+    for (let z=0; z<W; z++) {
+      for (let y=0; y<H; y++) {
+        if (getBlock(x,y,z) === TORCH && count < 32) {
+          const tl = new THREE.PointLight(0xff9933, 1.2, 10);
+          tl.position.set(x + 0.5, y + 0.6, z + 0.5);
+          scene.add(tl);
+          torchLights.push(tl);
+          count++;
+        }
+      }
+    }
+  }
+}
+
+// ---------- 雲 (Clouds) の追加 ----------
 const cloudTexture = textureLoader.load('clouds.png');
 cloudTexture.wrapS = THREE.RepeatWrapping;
 cloudTexture.wrapT = THREE.RepeatWrapping;
@@ -320,13 +405,12 @@ cloudTexture.magFilter = THREE.NearestFilter;
 cloudTexture.minFilter = THREE.NearestFilter;
 cloudTexture.repeat.set(12, 12); 
 
-// テクスチャ競合バグを防ぐため、ブレンドモードをNormalBlending＋alphaTestに調整
 const cloudMat = new THREE.MeshBasicMaterial({
   map: cloudTexture,
   transparent: true,
   blending: THREE.NormalBlending,
   alphaTest: 0.1,
-  opacity: 0.8,
+  opacity: 0.7,
   depthWrite: false,
   side: THREE.DoubleSide
 });
@@ -373,23 +457,20 @@ function buildMeshes() {
         const b = getBlock(x,y,z);
         if (b === AIR) continue;
         const isWater = (b === WATER);
+        const isTorch = (b === TORCH);
+
         for (const f of FACES) {
           const nx=f.dir[0], ny=f.dir[1], nz=f.dir[2];
           const nb = getBlock(x+nx,y+ny,z+nz);
-          const hideFace = isWater ? (nb !== AIR) : (nb !== AIR && nb !== WATER);
-          if (hideFace) continue;
+          
+          // 隣が空気か水、または隣が松明なら面を描画する
+          const hideFace = isWater ? (nb !== AIR) : (nb !== AIR && nb !== WATER && nb !== TORCH);
+          if (hideFace && !isTorch) continue;
 
           let renderType = b;
-          if (b === GRASS) {
-            if (ny === 1) {
-              renderType = GRASS_TOP;
-            }
-          }
+          if (b === GRASS && ny === 1) renderType = GRASS_TOP;
 
-          let col = BASE_COLOR[renderType] || [1,0,1];
-          if (b === GRASS && ny === 0) {
-            col = [1.0, 1.0, 1.0]; 
-          }
+          let col = (b === GRASS && ny === 0) ? [1.0, 1.0, 1.0] : (BASE_COLOR[renderType] || [1,1,1]);
           const shade = faceShade(nx,ny,nz);
           const r=col[0]*shade, g=col[1]*shade, bl=col[2]*shade;
 
@@ -398,6 +479,14 @@ function buildMeshes() {
           const carr = isWater ? wCol : chunk.col;
           const narr = isWater ? wNorm : chunk.norm;
           const uvarr = isWater ? wUV : chunk.uv;
+
+          // 松明の場合は、ブロックの中心に小さく細長い棒として描画する
+          let cx = x, cy = y, cz = z;
+          let scaleX = 1, scaleY = 1, scaleZ = 1;
+          if (isTorch) {
+            scaleX = 0.14; scaleZ = 0.14; scaleY = 0.65;
+            cx = x + 0.43; cz = z + 0.43; cy = y; 
+          }
 
           const c = f.corners;
           const tri = [c[0],c[1],c[2], c[0],c[2],c[3]];
@@ -409,7 +498,7 @@ function buildMeshes() {
           let uvIdx = 0;
 
           for (const corner of tri) {
-            arr.push(x+corner[0], y+corner[1], z+corner[2]);
+            arr.push(cx + corner[0]*scaleX, cy + corner[1]*scaleY, cz + corner[2]*scaleZ);
             carr.push(r,g,bl);
             narr.push(nx,ny,nz);
             uvarr.push(uvs[uvIdx][0], uvs[uvIdx][1]);
@@ -467,6 +556,9 @@ function buildMeshes() {
     waterMesh = new THREE.Mesh(wGeo, wMat);
     scene.add(waterMesh);
   }
+
+  // 松明の設置状況が変わったらライトの位置も更新
+  updateTorchLightsInScene();
 }
 buildMeshes();
 
@@ -495,7 +587,7 @@ const keys = {};
 document.addEventListener('keydown', e=>{
   keys[e.code]=true;
   const num = parseInt(e.key);
-  if (num>=1 && num<=7) selectSlot(num-1);
+  if (num>=1 && num<=8) selectSlot(num-1); // 8番目のスロット(松明)に対応
 });
 document.addEventListener('keyup', e=>{ keys[e.code]=false; });
 
@@ -508,7 +600,7 @@ document.addEventListener('wheel', e=>{
   if (document.pointerLockElement) selectSlot(selected + (e.deltaY>0?1:-1));
 });
 
-function isSolidBlock(b){ return b !== AIR && b !== WATER; }
+function isSolidBlock(b){ return b !== AIR && b !== WATER && b !== TORCH; } // 松明はすり抜けるように設定
 
 function collidesAt(px,py,pz){
   const r = player.radius;
@@ -566,6 +658,9 @@ function updatePlayer(dt){
   camera.rotation.order = 'YXZ';
   camera.rotation.y = player.yaw;
   camera.rotation.x = player.pitch;
+
+  // プレイヤーの持つ光源も追従
+  playerLight.position.set(player.pos.x, player.pos.y + player.height, player.pos.z);
 }
 
 // ---------- Pointer lock ----------
@@ -642,7 +737,8 @@ function raycastVoxel(maxDist){
   let lastNormal = [0,0,0];
   while (dist < maxDist) {
     const b = getBlock(x,y,z);
-    if (isSolidBlock(b)) {
+    // 空気、水、またはターゲットが松明で自分が松明を置こうとしていない時以外を「当たり判定」とする
+    if (b !== AIR && b !== WATER) {
       return { x,y,z, normal:lastNormal, block:b };
     }
     if (tMaxX < tMaxY && tMaxX < tMaxZ) {
@@ -661,6 +757,8 @@ function collidesAtBlockPlace(bx,by,bz){
   const minX = Math.floor(player.pos.x-r), maxX = Math.floor(player.pos.x+r);
   const minZ = Math.floor(player.pos.z-r), maxZ = Math.floor(player.pos.z+r);
   const minY = Math.floor(player.pos.y), maxY = Math.floor(player.pos.y+player.height);
+  // 松明はプレイヤーの足元に重なっても設置できるように例外処理
+  if (HOTBAR_BLOCKS[selected] === TORCH) return false;
   return bx>=minX && bx<=maxX && by>=minY && by<=maxY && bz>=minZ && bz<=maxZ;
 }
 
@@ -853,8 +951,13 @@ function updateHotbarUI(){
   HOTBAR_BLOCKS.forEach((b,i)=>{
     const slot = document.createElement('div');
     slot.className = 'slot' + (i===selected?' active':'');
-    const c = BASE_COLOR[b];
-    slot.style.background = `rgb(${Math.floor(c[0]*255)},${Math.floor(c[1]*255)},${Math.floor(c[2]*255)})`;
+    if (b === TORCH) {
+      // 内蔵松明はオレンジと茶色のグラデーションでホットバーに表現
+      slot.style.background = 'linear-gradient(#ff6600, #5c4033)';
+    } else {
+      const c = BASE_COLOR[b];
+      slot.style.background = `rgb(${Math.floor(c[0]*255)},${Math.floor(c[1]*255)},${Math.floor(c[2]*255)})`;
+    }
     const label = document.createElement('span');
     label.textContent = (i+1);
     slot.appendChild(label);
@@ -867,10 +970,74 @@ updateHotbarUI();
 // ---------- HUD ----------
 const hudEl = document.getElementById('hud');
 function updateHud(fps){
+  const hour = Math.floor(gameTime).toString().padStart(2, '0');
+  const min = Math.floor((gameTime % 1) * 60).toString().padStart(2, '0');
+  
   hudEl.innerHTML =
     `座標: X ${player.pos.x.toFixed(1)}  Y ${player.pos.y.toFixed(1)}  Z ${player.pos.z.toFixed(1)}<br>` +
+    `時間: ${hour}:${min}<br>` +
     `選択中: ${BLOCK_NAMES[HOTBAR_BLOCKS[selected]]}<br>` +
     `FPS: ${fps}`;
+}
+
+// ---------- Sky & Light Evolution (時間経過の色の計算) ----------
+function updateEnvironmentByTime() {
+  // 24時間を 0.0 〜 1.0 に正規化
+  const dayProgress = gameTime / 24.0;
+  
+  // 太陽の角度（東から昇って西へ沈む）
+  const angle = (dayProgress * Math.PI * 2) - (Math.PI / 2);
+  sun.position.set(Math.cos(angle) * 80 + W/2, Math.sin(angle) * 80, W/2);
+
+  let skyColor, fogColor, sunIntensity, hemiIntensity, torchIntensity;
+
+  // 時間帯ごとの環境変化ロジック
+  if (gameTime >= 4 && gameTime < 6) { // 早朝 (4:00 - 6:00)
+    let t = (gameTime - 4) / 2;
+    skyColor = new THREE.Color(0x111122).lerp(new THREE.Color(0xcc7755), t);
+    sunIntensity = 0.0 + t * 0.3;
+    hemiIntensity = 0.2 + t * 0.3;
+    torchIntensity = 1.0 - t * 0.8;
+  } else if (gameTime >= 6 && gameTime < 11) { // 午前中 (6:00 - 11:00)
+    let t = (gameTime - 6) / 5;
+    skyColor = new THREE.Color(0xcc7755).lerp(new THREE.Color(0x8ec6f0), t);
+    sunIntensity = 0.3 + t * 0.4;
+    hemiIntensity = 0.5 + t * 0.2;
+    torchIntensity = 0.2;
+  } else if (gameTime >= 11 && gameTime < 15) { // 昼 (11:00 - 15:00)
+    skyColor = new THREE.Color(0x8ec6f0);
+    sunIntensity = 0.7;
+    hemiIntensity = 0.7;
+    torchIntensity = 0.1;
+  } else if (gameTime >= 15 && gameTime < 18) { // 夕方前 (15:00 - 18:00)
+    let t = (gameTime - 15) / 3;
+    skyColor = new THREE.Color(0x8ec6f0).lerp(new THREE.Color(0xdd6633), t);
+    sunIntensity = 0.7 - t * 0.3;
+    hemiIntensity = 0.7 - t * 0.2;
+    torchIntensity = 0.1 + t * 0.6;
+  } else if (gameTime >= 18 && gameTime < 20) { // 日没 (18:00 - 20:00)
+    let t = (gameTime - 18) / 2;
+    skyColor = new THREE.Color(0xdd6633).lerp(new THREE.Color(0x111122), t);
+    sunIntensity = 0.4 * (1 - t);
+    hemiIntensity = 0.5 - t * 0.35;
+    torchIntensity = 0.7 + t * 0.8;
+  } else { // 夜 (20:00 - 4:00)
+    skyColor = new THREE.Color(0x050510);
+    sunIntensity = 0.0;
+    hemiIntensity = 0.15;
+    torchIntensity = 1.5;
+  }
+
+  // 背景色、フォグ、ライトを適用
+  scene.background = skyColor;
+  globalFog.color = skyColor;
+  sun.intensity = sunIntensity;
+  hemi.color = skyColor; // 環境光も空の色にうっすら同期
+  hemi.intensity = hemiIntensity;
+
+  // 手持ち・および周囲の松明ライトの強さを調整（昼間は目立たなくし、夜に輝く）
+  playerLight.intensity = torchIntensity;
+  torchLights.forEach(l => l.intensity = torchIntensity * 1.2);
 }
 
 // ---------- Resize ----------
@@ -890,10 +1057,17 @@ function animate(now){
   const dt = Math.min((now - lastTime)/1000, 0.05);
   lastTime = now;
 
+  // 時間の進行
+  gameTime += dt * TIME_SPEED;
+  if (gameTime >= 24.0) gameTime = 0.0;
+
+  // 時間に応じた空とライティングの更新
+  updateEnvironmentByTime();
+
   // 雲のアニメーション (ゆっくり斜めに流す)
   if (cloudTexture) {
-    cloudTexture.offset.x += 0.003 * dt;
-    cloudTexture.offset.y += 0.001 * dt;
+    cloudTexture.offset.x += 0.002 * dt;
+    cloudTexture.offset.y += 0.0008 * dt;
   }
 
   if (document.pointerLockElement === canvas) {
