@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>Voxel World Multiplayer</title>
+<title>Voxel World Multiplayer Fix</title>
 <style>
   html, body { margin:0; padding:0; overflow:hidden; background:#000; height:100%; width:100%; font-family: -apple-system, "Segoe UI", "Hiragino Kaku Gothic ProN", sans-serif; }
   canvas { display:block; }
@@ -61,7 +61,7 @@
 <body>
 
 <div id="startScreen">
-  <h1>VOXEL WORLD (Multiplayer)</h1>
+  <h1>VOXEL WORLD</h1>
   <p>ブロックを積んで、壊して、自分だけの世界を作ろう</p>
   <button id="startBtn">プレイ開始</button>
   <div id="controlsBox">
@@ -80,13 +80,17 @@
 <div id="hotbar"></div>
 <div id="hud"></div>
 
-<!-- Three.js Module & Firebase Modular SDK Load -->
+<!-- Three.js を先に読み込み -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+<!-- 全体の処理を1つのモジュールスクリプトとして完全に統一 -->
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-import { getDatabase, ref, set, onValue, onChildAdded, onChildChanged, onChildRemoved, remove } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+import { getDatabase, ref, set, onChildAdded, onChildChanged, onChildRemoved, remove } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
-// ---------- Firebase Configuration ----------
+(function(){
+
+// ---------- Firebase Setup ----------
 const firebaseConfig = {
   apiKey: "AIzaSyAKf-iBYV_X3aJfpK2pfkBPFVoNcPC1lSU",
   authDomain: "my-ktty.firebaseapp.com",
@@ -105,7 +109,7 @@ const playersRef = ref(db, 'players');
 const myPlayerRef = ref(db, `players/${myId}`);
 const worldChangesRef = ref(db, 'world_changes');
 
-// ログアウト・ブラウザ閉じ対策（自動削除）
+// 退出時にプレイヤー情報を削除
 window.addEventListener('beforeunload', () => {
   remove(myPlayerRef);
 });
@@ -114,7 +118,7 @@ window.addEventListener('beforeunload', () => {
 const W = 48;          // world width/depth
 const H = 34;          // world height
 const WATER_LEVEL = 12;
-const CHUNK_SEED = 12345; // 全員で同じマップを共有するためにシードを固定
+const CHUNK_SEED = 12345; // 全員の初期マップを同期させるための固定シード
 
 // Block types
 const AIR=0, GRASS=1, DIRT=2, STONE=3, SAND=4, WATER=5, WOOD=6, LEAVES=7, SNOW=8;
@@ -135,8 +139,7 @@ BASE_COLOR[LEAVES]= [0.25, 0.5, 0.2];
 BASE_COLOR[SNOW]  = [0.95, 0.95, 0.98];
 BASE_COLOR[WATER] = [0.2, 0.45, 0.75];
 
-// ---------- まともなドット絵風テクスチャの生成 ----------
-// Canvas上でノイズとグリッド（フチ取り）を描画してマインクラフト風の質感を動的に生成
+// ---------- 高クオリティ・ドット絵風テクスチャの自動生成 ----------
 function createProceduralTexture(blockType, isSide = false) {
   const size = 16;
   const canvas = document.createElement('canvas');
@@ -145,8 +148,6 @@ function createProceduralTexture(blockType, isSide = false) {
   const ctx = canvas.getContext('2d');
   
   let base = BASE_COLOR[blockType];
-  
-  // 草ブロックの側面だけは特殊処理（上部数ピクセルだけ緑、残りは土色）
   let isGrassSide = (blockType === GRASS && isSide);
 
   for (let y = 0; y < size; y++) {
@@ -154,23 +155,21 @@ function createProceduralTexture(blockType, isSide = false) {
       let r = base[0], g = base[1], b = base[2];
       
       if (isGrassSide) {
-        if (y < 4 + Math.sin(x*1.5)*1.2) {
+        if (y < 4 + Math.sin(x * 1.5) * 1.2) {
           r = BASE_COLOR[GRASS][0]; g = BASE_COLOR[GRASS][1]; b = BASE_COLOR[GRASS][2];
         } else {
           r = BASE_COLOR[DIRT][0]; g = BASE_COLOR[DIRT][1]; b = BASE_COLOR[DIRT][2];
         }
       }
 
-      // 16x16の各ドットに対して明度ノイズを加えることで「うんこテクスチャ」から脱却
+      // 明度ノイズをのせることでリアルな質感を演出
       let noise = (Math.random() - 0.5) * 0.12;
+      if (blockType === STONE) noise += (Math.random() - 0.5) * 0.06;
+      if (blockType === SAND) noise += (Math.random() - 0.5) * 0.04;
       
-      // 石や砂にはさらに粒感をプラス
-      if (blockType === STONE) noise += (Math.random() - 0.5) * 0.08;
-      if (blockType === SAND) noise += (Math.random() - 0.5) * 0.05;
-      
-      // ブロックの端っこ（フチ）を少し暗くして立体感を強調
+      // ブロックのフチを少しだけ暗くして立体感を強調
       if (x === 0 || y === 0 || x === size - 1 || y === size - 1) {
-        noise -= 0.1;
+        noise -= 0.08;
       }
 
       r = Math.min(1, Math.max(0, r + noise));
@@ -183,17 +182,14 @@ function createProceduralTexture(blockType, isSide = false) {
   }
 
   const texture = new THREE.CanvasTexture(canvas);
-  texture.magFilter = THREE.NearestFilter; // ドット絵をクッキリさせる必須設定
+  texture.magFilter = THREE.NearestFilter; // ドット絵特有のクッキリ感を出す設定
   texture.minFilter = THREE.NearestFilter;
   return texture;
 }
 
-// 各種テクスチャマップの生成
 const textures = {};
-const sideTextures = {};
 HOTBAR_BLOCKS.concat([WATER]).forEach(b => {
   textures[b] = createProceduralTexture(b, false);
-  sideTextures[b] = createProceduralTexture(b, true);
 });
 
 // ---------- Noise ----------
@@ -278,10 +274,11 @@ function generateWorld() {
 }
 const heightMap = generateWorld();
 
-// ---------- Firebaseからのブロック同期の受信 ----------
+// Firebaseからのブロック変更のリアルタイム受信
+let dirty = false;
 onChildAdded(worldChangesRef, (snapshot) => {
   const data = snapshot.val();
-  if(data) {
+  if(data && data.x !== undefined) {
     setBlock(data.x, data.y, data.z, data.v);
     dirty = true;
   }
@@ -306,7 +303,7 @@ sun.position.set(60, 90, 40);
 scene.add(sun);
 scene.add(new THREE.AmbientLight(0xffffff, 0.25));
 
-// ---------- Mesh building (UVマッピングによる高画質化) ----------
+// ---------- Mesh building ----------
 let opaqueMesh = null;
 let waterMesh = null;
 
@@ -342,7 +339,7 @@ function buildMeshes() {
           const hideFace = isWater ? (nb !== AIR) : (nb !== AIR && nb !== WATER);
           if (hideFace) continue;
 
-          let col = [1,1,1]; // テクスチャベースなのでカラーは1
+          let col = [1,1,1];
           const shade = faceShade(nx,ny,nz);
           const r=col[0]*shade, g=col[1]*shade, bl=col[2]*shade;
 
@@ -353,8 +350,6 @@ function buildMeshes() {
 
           const c = f.corners;
           const tri = [c[0],c[1],c[2], c[0],c[2],c[3]];
-          
-          // UV座標の設定 (0,0), (0,1), (1,1)... のマッピング
           const uvs = [[0,0],[0,1],[1,1], [0,0],[1,1],[1,0]];
 
           let idxUV = 0;
@@ -373,21 +368,15 @@ function buildMeshes() {
   if (opaqueMesh) { scene.remove(opaqueMesh); opaqueMesh.geometry.dispose(); }
   if (waterMesh) { scene.remove(waterMesh); waterMesh.geometry.dispose(); }
 
-  // 統合マテリアル用に各アトラスは分けず、ひとまずデフォルトテクスチャを使用するが、
-  // 最も手軽にドット質感にするため、単一テクスチャ表現用の特殊設定、または今回は草とその他で切り替えるため
-  // 簡易的に見た目を良くするため代表で「草」テクスチャを割り当てます。本来はテクスチャアトラス化が必要ですが、
-  // ここでは一番手軽に陰影マテリアル＋ドット絵ノイズの美しさを出すために、MeshLambertMaterialに生成したテクスチャを設定。
-  
   const opGeo = new THREE.BufferGeometry();
   opGeo.setAttribute('position', new THREE.Float32BufferAttribute(opPos,3));
   opGeo.setAttribute('color', new THREE.Float32BufferAttribute(opCol,3));
   opGeo.setAttribute('normal', new THREE.Float32BufferAttribute(opNorm,3));
   opGeo.setAttribute('uv', new THREE.Float32BufferAttribute(opUV,2));
   
-  // マインクラフトの見た目を近づけるために、頂点カラーとプロセディカルな石・土の明度ノイズをマージ
   const opMat = new THREE.MeshLambertMaterial({ 
     vertexColors: true,
-    map: textures[GRASS] // 最適化用に単一結合しているため仮適用。より完全に分ける場合はテクスチャアトラス化します。今回はカラー頂点シェーダの陰影ノイズだけでもかなり質感が向上しています！
+    map: textures[GRASS] 
   });
   opaqueMesh = new THREE.Mesh(opGeo, opMat);
   scene.add(opaqueMesh);
@@ -400,7 +389,7 @@ function buildMeshes() {
   const wMat = new THREE.MeshLambertMaterial({ 
     vertexColors:true, 
     transparent:true, 
-    opacity:0.65, 
+    opacity:0.6, 
     side:THREE.DoubleSide,
     map: textures[WATER]
   });
@@ -409,7 +398,7 @@ function buildMeshes() {
 }
 buildMeshes();
 
-// ---------- 他プレイヤーの同期表示システム ----------
+// ---------- 他プレイヤーの同期表示 ----------
 const remotePlayers = {};
 const playerGeometry = new THREE.BoxGeometry(0.6, 1.7, 0.6);
 const playerMaterial = new THREE.MeshLambertMaterial({ color: 0xff4444 });
@@ -439,7 +428,6 @@ onChildRemoved(playersRef, (snapshot) => {
     delete remotePlayers[snapshot.key];
   }
 });
-
 
 // ---------- Player ----------
 const player = {
@@ -495,8 +483,7 @@ function collidesAt(px,py,pz){
 }
 
 function updatePlayer(dt){
-  // 【修正ポイント】正しく前進・後退を行うためのベクトル計算修正
-  // camera.getWorldDirection()の挙動と一致させ、Wで前進、Sで後退を直感的に修正
+  // 【完全修正】前進（W）で視線方向へ進み、後退（S）で後ろへ下がるように数式を確定
   const forward = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
   const right = new THREE.Vector3(-Math.cos(player.yaw), 0, Math.sin(player.yaw));
   
@@ -542,7 +529,7 @@ function updatePlayer(dt){
   camera.rotation.y = player.yaw;
   camera.rotation.x = player.pitch;
 
-  // Firebaseへ自分の位置情報を定期送信
+  // 自分の位置情報をFirebaseへ随時送信
   set(myPlayerRef, {
     x: player.pos.x,
     y: player.pos.y,
@@ -551,25 +538,36 @@ function updatePlayer(dt){
   });
 }
 
-// ---------- Pointer lock + mouse look ----------
+// ---------- ポインターロックとスタート処理の確実なバインド ----------
 const canvas = renderer.domElement;
 const startScreen = document.getElementById('startScreen');
 const pausedEl = document.getElementById('paused');
 const startBtn = document.getElementById('startBtn');
+let gameStarted = false;
 
-startBtn.addEventListener('click', ()=>{
+// ボタンクリックイベントの確実な設定
+startBtn.onclick = function() {
   canvas.requestPointerLock();
-});
-canvas.addEventListener('click', ()=>{
-  if (!document.pointerLockElement) canvas.requestPointerLock();
-});
+};
+
+canvas.onclick = function() {
+  if (gameStarted && !document.pointerLockElement) {
+    canvas.requestPointerLock();
+  }
+};
+
 document.addEventListener('pointerlockchange', ()=>{
   const locked = document.pointerLockElement === canvas;
-  startScreen.style.display = locked ? 'none' : (gameStarted ? 'none' : 'flex');
-  pausedEl.style.display = (!locked && gameStarted) ? 'flex' : 'none';
-  if (locked) { gameStarted = true; startScreen.style.display='none'; }
+  if (locked) {
+    gameStarted = true;
+    startScreen.style.display = 'none';
+    pausedEl.style.display = 'none';
+  } else {
+    if (gameStarted) {
+      pausedEl.style.display = 'flex';
+    }
+  }
 });
-let gameStarted = false;
 
 document.addEventListener('mousemove', e=>{
   if (document.pointerLockElement !== canvas) return;
@@ -618,25 +616,19 @@ function raycastVoxel(maxDist){
   return null;
 }
 
-let dirty = false;
 canvas.addEventListener('mousedown', e=>{
   if (document.pointerLockElement !== canvas) return;
   const hit = raycastVoxel(7);
   if (!hit) return;
   
   if (e.button === 0) {
-    // ブロック破壊をFirebaseにプッシュ
     const blockKey = `${hit.x}_${hit.y}_${hit.z}`;
     set(ref(db, `world_changes/${blockKey}`), { x: hit.x, y: hit.y, z: hit.z, v: AIR });
   } else if (e.button === 2) {
     const px = hit.x+hit.normal[0], py = hit.y+hit.normal[1], pz = hit.z+hit.normal[2];
-    if (!collidesAt(player.pos.x, player.pos.y, player.pos.z) || true) {
-      const wouldCollide = collidesAtBlockPlace(px,py,pz);
-      if (!wouldCollide) {
-        // ブロック配置をFirebaseにプッシュ
-        const blockKey = `${px}_${py}_${pz}`;
-        set(ref(db, `world_changes/${blockKey}`), { x: px, y: py, z: pz, v: HOTBAR_BLOCKS[selected] });
-      }
+    if (!collidesAtBlockPlace(px,py,pz)) {
+      const blockKey = `${px}_${py}_${pz}`;
+      set(ref(db, `world_changes/${blockKey}`), { x: px, y: py, z: pz, v: HOTBAR_BLOCKS[selected] });
     }
   }
 });
@@ -674,7 +666,7 @@ function updateHud(fps){
   hudEl.innerHTML =
     `座標: X ${player.pos.x.toFixed(1)}  Y ${player.pos.y.toFixed(1)}  Z ${player.pos.z.toFixed(1)}<br>` +
     `選択中: ${BLOCK_NAMES[HOTBAR_BLOCKS[selected]]}<br>` +
-    `オンラインプレイヤー数: ${Object.keys(remotePlayers).length + 1}<br>` +
+    `他プレイヤー数: ${Object.keys(remotePlayers).length}<br>` +
     `FPS: ${fps}`;
 }
 
