@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Minecraft rd-132211 - Multiplayer Edition</title>
+    <title>Minecraft rd-132211 - Steve Multiplayer Edition</title>
     <style>
         body {
             margin: 0;
@@ -62,15 +62,12 @@
         const db = getDatabase(app);
         const playerId = crypto.randomUUID();
 
-        // 他プレイヤーの3Dモデルを管理するオブジェクト
         const otherPlayers = {};
 
-        // 自分の位置をFirebaseに送信
         function updatePlayerNetwork(x, y, z, yaw) {
             set(ref(db, "players/" + playerId), { x, y, z, yaw });
         }
 
-        // 切断時にFirebaseから自分を削除
         onDisconnect(ref(db, "players/" + playerId)).remove();
 
         // --- Three.js 基本設定 ---
@@ -87,13 +84,13 @@
         document.body.appendChild(renderer.domElement);
 
         // --- 光源 ---
-        const ambientLight = new THREE.AmbientLight(0xdddddd); 
+        const ambientLight = new THREE.AmbientLight(0xbbbbbb); 
         scene.add(ambientLight);
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.4);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6);
         directionalLight.position.set(0.6, 1.0, 0.4).normalize();
         scene.add(directionalLight);
 
-        // --- テクスチャ生成 ---
+        // --- テクスチャ・マテリアル生成ロジック ---
         function createFaithfulTexture(type) {
             const canvas = document.createElement('canvas');
             canvas.width = 16; canvas.height = 16;
@@ -167,13 +164,39 @@
             stone: Array(6).fill(new THREE.MeshLambertMaterial({ map: textures.stone }))
         };
 
-        // --- ワールドデータ構成 (80x80) ---
+        // スキンテクスチャ読み込み
+        const textureLoader = new THREE.TextureLoader();
+        const steveTexture = textureLoader.load('steve.png');
+        steveTexture.magFilter = THREE.NearestFilter;
+        steveTexture.minFilter = THREE.NearestFilter;
+
+        // 指定のUV矩形からThree.js用のマテリアル（6面分）を切り出す汎用関数
+        function createCubeMaterials(tex, u, v, w, h, d) {
+            const faces = [
+                { x: u + d + w,     y: v + d,     w: w, h: h, name: 'right' },
+                { x: u,             y: v + d,     w: w, h: h, name: 'left' },
+                { x: u + d,         y: v,         w: w, h: d, name: 'top' },
+                { x: u + d + w,     y: v,         w: w, h: d, name: 'bottom' },
+                { x: u + d,         y: v + d,     w: w, h: h, name: 'front' },
+                { x: u + d + w + d, y: v + d,     w: w, h: h, name: 'back' }
+            ];
+
+            return faces.map(f => {
+                const t = tex.clone();
+                t.needsUpdate = true;
+                t.repeat.set(f.w / 64, f.h / 64);
+                t.offset.set(f.x / 64, 1 - (f.y + f.h) / 64);
+                return new THREE.MeshLambertMaterial({ map: t, transparent: true });
+            });
+        }
+
+        // --- ワールド生成 (80x80) ---
         const worldSize = 80;
         const worldHeight = 6;
         const blockGeo = new THREE.BoxGeometry(1, 1, 1);
         
         const worldData = {}; 
-        const maxBlocksPerType = worldSize * worldSize * worldHeight * 2; // 置くことも考慮してバッファ拡張
+        const maxBlocksPerType = worldSize * worldSize * worldHeight * 2;
 
         const instancedMeshes = {
             grass: new THREE.InstancedMesh(blockGeo, materials.grass, maxBlocksPerType),
@@ -219,7 +242,6 @@
             }
         }
 
-        // 初期マップ生成
         for (let x = -worldSize/2; x < worldSize/2; x++) {
             for (let z = -worldSize/2; z < worldSize/2; z++) {
                 for (let y = -worldHeight; y <= 0; y++) {
@@ -230,23 +252,48 @@
         }
         updateWorldRender();
 
-        // --- 他のプレイヤーのアバター生成機能 ---
-        const remotePlayerGeo = new THREE.BoxGeometry(0.6, 1.8, 0.6);
-        const remotePlayerMat = new THREE.MeshLambertMaterial({ color: 0x44cc44 }); // 緑色のクラシック風スキン
+        // --- 立体スティーブモデルの組み立て ---
+        function createSteveMesh() {
+            const steveGroup = new THREE.Group();
 
-        function createRemotePlayerMesh() {
-            const group = new THREE.Group();
-            const body = new THREE.Mesh(remotePlayerGeo, remotePlayerMat);
-            body.position.y = 0.9; // 中心点を足元にする
-            group.add(body);
-            return group;
+            // 各パーツのマテリアルをクラシックスキンのUV仕様からマッピング
+            const headMats = createCubeMaterials(steveTexture, 0, 0, 8, 8, 8);
+            const bodyMats = createCubeMaterials(steveTexture, 16, 16, 8, 12, 4);
+            const armMats  = createCubeMaterials(steveTexture, 40, 16, 4, 12, 4);
+            const legMats  = createCubeMaterials(steveTexture, 0, 16, 4, 12, 4);
+
+            // 1ブロック＝1メートル基準のスケール変換
+            const headGeo = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+            const bodyGeo = new THREE.BoxGeometry(0.5, 0.75, 0.25);
+            const armGeo  = new THREE.BoxGeometry(0.25, 0.75, 0.25);
+            const legGeo  = new THREE.BoxGeometry(0.25, 0.75, 0.25);
+
+            const head = new THREE.Mesh(headGeo, headMats);
+            head.position.set(0, 1.425, 0);
+
+            const body = new THREE.Mesh(bodyGeo, bodyMats);
+            body.position.set(0, 0.825, 0);
+
+            const leftArm = new THREE.Mesh(armGeo, armMats);
+            leftArm.position.set(0.375, 0.825, 0);
+
+            const rightArm = new THREE.Mesh(armGeo, armMats);
+            rightArm.position.set(-0.375, 0.825, 0);
+
+            const leftLeg = new THREE.Mesh(legGeo, legMats);
+            leftLeg.position.set(0.125, 0.375, 0);
+
+            const rightLeg = new THREE.Mesh(legGeo, legMats);
+            rightLeg.position.set(-0.125, 0.375, 0);
+
+            steveGroup.add(head, body, leftArm, rightArm, leftLeg, rightLeg);
+            return steveGroup;
         }
 
-        // Firebaseから他プレイヤーの位置を同期
+        // ネットワーク経由の他プレイヤー同期
         onValue(ref(db, "players"), (snapshot) => {
             const playersData = snapshot.val() || {};
             
-            // 退出したプレイヤーの削除
             for (let id in otherPlayers) {
                 if (!playersData[id]) {
                     scene.remove(otherPlayers[id]);
@@ -254,19 +301,17 @@
                 }
             }
 
-            // 追加・更新
             for (let id in playersData) {
-                if (id === playerId) continue; // 自分はスキップ
+                if (id === playerId) continue;
 
                 const p = playersData[id];
                 if (!otherPlayers[id]) {
-                    otherPlayers[id] = createRemotePlayerMesh();
+                    otherPlayers[id] = createSteveMesh();
                     scene.add(otherPlayers[id]);
                 }
 
-                // 位置と回転の同期
                 otherPlayers[id].position.set(p.x, p.y, p.z);
-                otherPlayers[id].rotation.y = p.yaw;
+                otherPlayers[id].rotation.y = p.yaw + Math.PI; // 正面を向かせるための補正
             }
         });
 
@@ -299,7 +344,6 @@
             }
         });
 
-        // キー入力状態
         let keys = { KeyW: false, KeyA: false, KeyS: false, KeyD: false, Space: false, ShiftLeft: false };
         let currentSelectedBlock = 'grass';
 
@@ -309,7 +353,7 @@
             if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') keys.ShiftLeft = true;
 
             if (e.code === 'Digit1') currentSelectedBlock = 'grass';
-            if (e.code === 'Digit2') currentSelectedBlock = 'stone'; // 石ブロック切り替え復活
+            if (e.code === 'Digit2') currentSelectedBlock = 'stone';
         });
 
         window.addEventListener('keyup', (e) => {
@@ -318,7 +362,7 @@
             if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') keys.ShiftLeft = false;
         });
 
-        // --- 改良版 AABB 衝突判定 ---
+        // --- AABB 衝突判定 ---
         function checkCollision(pos) {
             const margin = 0.001;
             const minX = pos.x - player.width / 2 + margin;
@@ -405,8 +449,6 @@
         const clock = new THREE.Clock();
         const GRAVITY = 22.0;   
         const JUMP_FORCE = 7.5; 
-
-        // ネットワーク通信の間引き（1秒間に30回送信）
         let networkTimer = 0;
 
         function animate() {
@@ -431,21 +473,17 @@
                     player.velocity.x = moveVec.x;
                     player.velocity.z = moveVec.z;
                 } else {
-                    player.velocity.x *= 0.2; // 慣性を抑えて操作性をキビキビに
+                    player.velocity.x *= 0.2; 
                     player.velocity.z *= 0.2;
                 }
 
-                // 重力計算
                 player.velocity.y -= GRAVITY * delta;
 
-                // ジャンプ判定
                 if (keys.Space && player.onGround) {
                     player.velocity.y = JUMP_FORCE;
                     player.onGround = false;
                 }
 
-                // --- 厳密なすり抜け防止軸別移動 ---
-                // X軸の移動と衝突判定
                 let nextPos = player.position.clone();
                 nextPos.x += player.velocity.x * delta;
                 if (!checkCollision(nextPos)) {
@@ -454,7 +492,6 @@
                     player.velocity.x = 0;
                 }
 
-                // Z軸の移動と衝突判定
                 nextPos = player.position.clone();
                 nextPos.z += player.velocity.z * delta;
                 if (!checkCollision(nextPos)) {
@@ -463,7 +500,6 @@
                     player.velocity.z = 0;
                 }
 
-                // Y軸の移動と衝突判定
                 player.onGround = false;
                 nextPos = player.position.clone();
                 nextPos.y += player.velocity.y * delta;
@@ -473,23 +509,19 @@
                 } else {
                     if (player.velocity.y < 0) {
                         player.onGround = true;
-                        // 着地時に少しだけ浮かせる遊びをなくし、正確にブロックの上に乗せる
                         player.position.y = Math.round(player.position.y * 100) / 100;
                     }
                     player.velocity.y = 0;
                 }
 
-                // 奈落リスポーン
                 if (player.position.y < -30) {
                     player.position.set(0, 4, 5);
                     player.velocity.set(0, 0, 0);
                 }
 
-                // カメラ位置の同期
                 camera.position.copy(player.position);
                 camera.position.y += player.eyeHeight;
 
-                // --- Firebaseへ座標を同期（30FPS制限） ---
                 networkTimer += delta;
                 if (networkTimer > 0.033) {
                     updatePlayerNetwork(player.position.x, player.position.y, player.position.z, yaw);
